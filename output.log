@@ -1,0 +1,27 @@
+    13:15:56.203 DEV      livekit.agents     Watching /home/abdur/Desktop/Tawfq_Projects/Noura-v2  
+    13:15:59.189 INFO     livekit.agents     starting worker {"version": "1.5.7", "rtc-version": "1.1.7"}
+    13:15:59.194 INFO     livekit.agents     plugin registered {"plugin": "livekit.plugins.deepgram", "version": "1.5.7"}
+    13:15:59.197 INFO     livekit.agents     plugin registered {"plugin": "livekit.plugins.faseeh", "version": "0.1.5"}
+    13:15:59.200 INFO     livekit.agents     plugin registered {"plugin": "livekit.plugins.openai", "version": "1.5.7"}
+    13:15:59.203 INFO     livekit.agents     plugin registered {"plugin": "livekit.plugins.silero", "version": "1.5.7"}
+    13:15:59.206 INFO     livekit.agents     plugin registered {"plugin": "livekit.plugins.soniox", "version": "1.5.7"}
+    13:15:59.209 INFO     livekit.agents     preloading plugins  
+                                         {"packages": ["livekit.plugins.deepgram", "livekit.plugins.faseeh", "livekit.plugins.openai", 
+"livekit.plugins.silero", "livekit.plugins.soniox", "av"]}
+    13:15:59.219 INFO     livekit.agents     HTTP server listening on :36525  
+    13:16:01.976 INFO     livekit.agents     initializing process {"pid": 53096}
+    13:16:02.190 INFO     livekit.agents     process initialized {"pid": 53096, "elapsed_time": 0.21}
+    13:16:02.551 INFO     livekit.agents     registered worker  
+                                         {"agent_name": "outbound-caller-smart", "id": "AW_UMvkPKxU3RDk", "url": "ws://13.49.62.84:7880", "region": 
+"", "protocol": 17}
+    14:01:11.459 INFO     livekit.agents     shutting down worker {"id": "AW_UMvkPKxU3RDk"}
+    14:01:13.682 INFO     livekit.agents     starting worker {"version": "1.5.7", "rtc-version": "1.1.7"}
+    14:01:13.684 INFO     livekit.agents     plugin registered {"plugin": "livekit.plugins.deepgram", "version": "1.5.7"}
+    14:01:13.686 INFO     livekit.agents     plugin registered {"plugin": "livekit.plugins.faseeh", "version": "0.1.5"}
+    14:01:13.688 INFO     livekit.agents     plugin registered {"plugin": "livekit.plugins.openai", "version": "1.5.7"}
+    14:01:13.690 INFO     livekit.agents     plugin registered {"plugin": "livekit.plugins.silero", "version": "1.5.7"}
+    14:01:13.692 INFO     livekit.agents     plugin registered {"plugin": "livekit.plugins.soniox", "version": "1.5.7"}
+    14:01:13.694 INFO     livekit.agents     preloading plugins  
+                                         {"packages": ["livekit.plugins.deepgram", "livekit.plugins.faseeh", "livekit.plugins.openai", 
+"livekit.plugins.silero", "livekit.plugins.soniox", "av"]}
+    14:01:13.701 INFO     livekit.agents     HTTP server listening on :45947  

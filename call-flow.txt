@@ -1,0 +1,258 @@
+Below is a complete, production-grade call-flow design for Nora—covering happy paths, edge cases, and retry strategy—with explicit state logic, guardrails, and measurable outcomes for Saudi debt collection. 
+⸻ 
+🧭 1) System Overview (Finite-State + Event-Driven)
+Core model: Finite State Machine (FSM) + real-time intent detection
+INIT → DIAL → CONNECTED
+  → VERIFY_ID → DISCLOSE → CONTEXT
+  → INTENT_CLASSIFY
+     ├─ READY_TO_PAY
+     ├─ PARTIAL
+     ├─ DELAY
+     ├─ REFUSAL
+     └─ DISPUTE
+  → STRATEGY_EXECUTE
+  → COMMITMENT_CAPTURE (PTP)
+  → CONFIRMATION
+  → CLOSE
+  → LOG & SCHEDULE (next action)
+Global invariants (always-on):
+	•	Compliance filter (pre-TTS)
+	•	Tone modulation
+	•	Interruption handling
+	•	Latency target (<500–800 ms turn time)
+Aligned with:
+	•	SDAIA
+	•	Communications, Space & Technology Commission 
+⸻ 
+🟢 2) Happy Paths (Conversion-Oriented)
+HP-1: Immediate Full Payment (Best Case)
+Trigger: Intent = READY_TO_PAY within first 2 turns
+Flow
+	1.	VERIFY_ID → DISCLOSE → CONTEXT
+	2.	User: “بأدفع اليوم”
+	3.	Nora (anchor earliest): ممتاز، الله يعطيك العافية. هل يناسبك السداد الآن أو خلال الساعات القادمة؟ 
+	4.	Offer channel (link/IBAN)
+	5.	PTP Capture: نثبت السداد اليوم قبل [time] بمبلغ [X] ريال؟ 
+	6.	Confirmation + SMS link
+	7.	CLOSE
+Exit criteria
+	•	PTP(date=today, amount=full) + link sent
+KPIs
+	•	Same-day conversion rate
+	•	Link click-through rate 
+⸻ 
+HP-2: Scheduled Full Payment (Near-Term)
+Trigger: READY but not immediate
+Flow
+	•	Convert vague → exact: متى تحديدًا؟ اليوم مساءً أو غدًا صباحًا؟ 
+	•	Lock date/time window
+	•	PTP + reminder scheduling (T-24h, T-2h)
+Exit
+	•	PTP(date ≤ 7 days, amount=full)
+ 
+⸻
+ 
+HP-3: Partial Payment + Plan
+Trigger: PARTIAL
+Flow
+	1.	Elicit capacity: كم تقدر تبدأ فيه اليوم؟ 
+	2.	Anchor higher (10–30% above user)
+	3.	Structure: نبدأ بـ [X] اليوم، والباقي على دفعتين [dates]؟ 
+	4.	PTP (multi-installments)
+	5.	Confirm + send plan
+Exit
+	•	PTP(schedule ≥ 1 payment within 24–72h) 
+⸻ 
+HP-4: Delay → Commitment Conversion
+Trigger: DELAY (“بعد الراتب”)
+Flow
+	1.	Pin exact date: متى ينزل الراتب بالضبط؟ 
+	2.	Convert: نثبت السداد بتاريخ [date]؟ 
+	3.	Optional micro-payment: هل ممكن مبلغ بسيط اليوم لتأكيد الجدية؟ 
+Exit
+	•	PTP(date aligned to salary) ± micro-payment
+ 
+⸻
+ 
+🟠 3) Edge Cases (Handled Deterministically)
+EC-1: No Answer / Voicemail
+Flow
+	•	Attempt ring 20–30s
+	•	If voicemail:
+	•	Leave compliant, minimal message (no sensitive data)
+	•	Trigger SMS
+Voicemail script (short):
+معك نورة من [الشركة]. نأمل تواصلك معنا بخصوص حسابك. شكرًا.
+Next action
+	•	Retry schedule (see section 5)
+ 
+⸻
+ 
+EC-2: Wrong Number / Not the Person
+Flow
+	•	Apologize, request update
+	•		•	Mark record: CONTACT_INVALID
+Nora:
+عذرًا على الإزعاج. يبدو الرقم غير صحيح. شكرًا لك.
+Next
+	•	Remove from dialer / request data correction
+ 
+⸻
+ 
+EC-3: Identity Verification Failed / Refused
+Flow
+	•	Offer alternative (DOB/partial ID)
+	•	If still refused:
+	•	Provide callback to official number
+	•		•	Do not disclose debt
+Nora:
+حفاظًا على الخصوصية، أفضّل نكمل التحقق أو تقدر تتواصل معنا على الرقم الرسمي.
+Next
+	•	Schedule retry
+ 
+⸻
+ 
+EC-4: Customer Angry / Escalation
+Detection: sentiment = high negative
+Flow
+	1.	De-escalate: أتفهم انزعاجك… 
+	2.	Slow pace, reduce pressure
+	3.	Offer human transfer
+Decision
+	•	If de-escalation fails → TRANSFER_TO_AGENT
+ 
+⸻
+ 
+EC-5: Dispute (Amount Incorrect)
+Flow
+	1.	Acknowledge: أشكرك على التوضيح 
+	2.	Open ticket: DISPUTE_OPEN
+	3.	Parallel ask: هل تحب نبدأ بجزء غير مختلف عليه؟ 
+Next
+	•	Route to back-office
+	•	Follow-up call SLA (24–48h)
+ 
+⸻
+ 
+EC-6: Repeated Refusal
+Flow (3-step ladder)
+	1.	Empathy + reframe
+	2.	Offer smallest entry payment
+	3.	Set consequence without threat: من الأفضل نرتب حل الآن لتفادي أي إجراءات لاحقة 
+Decision
+	•	If still refuse:
+	•	Mark HARD_REFUSAL
+	•	Schedule later attempt with different script
+	•	Consider human escalation
+ 
+⸻
+ 
+EC-7: Technical Issues (ASR/TTS failure)
+Flow
+	•	Retry prompt once
+	•	Fallback: عذرًا، ما سمعتك بوضوح… 
+	•	If persists → callback scheduling
+ 
+⸻
+ 
+🔁 4) Retry Strategy (Dialer Intelligence)
+A. Attempt Cadence (example)
+Day	Attempts	Time Windows
+Day 1	2	10:00–12:00, 18:00–21:00
+Day 2	2	09:00–11:00, 17:00–20:00
+Day 3	1	12:00–15:00
+Day 5	1	18:00–21:00
+Rules
+	•	Max 5–6 attempts / 7 days
+	•	Vary time windows
+	•	Stop if:
+	•	PTP achieved
+	•	Opt-out
+	•	Invalid contact
+ 
+⸻
+ 
+B. Script Rotation (A/B/C)
+	•	Script A (standard)
+	•	Script B (short, direct)
+	•	Script C (empathy-first)
+Logic
+	•	If no engagement → switch script
+	•	If refusal → use empathy-first next attempt
+ 
+⸻
+ 
+C. Channel Mix (Omnichannel)
+	•	Call → SMS → WhatsApp (if permitted)
+	•	After missed call:
+	•	Send payment link + callback CTA
+ 
+⸻
+ 
+🧾 5) Commitment (PTP) Enforcement Loop
+After PTP
+T-24h → Reminder SMS
+T-2h  → Reminder SMS/Call
+T+0   → Check payment
+  ├─ Paid → CLOSE
+  └─ Not Paid → Trigger Follow-up Call (soft)
+Follow-up script:
+حاب أتأكد بخصوص السداد المتفق عليه اليوم؟
+ 
+⸻
+ 
+⚖️ 6) Compliance Controls (Embedded)
+Every turn must pass:
+	•	No threats or misleading claims
+	•	Clear purpose disclosure
+	•	Respectful language
+	•	Data minimization in voicemail/SMS
+Mapped to:
+	•	SDAIA
+	•	Communications, Space & Technology Commission
+ 
+⸻
+ 
+🧠 7) Decision Logic (Pseudo-Rules)
+IF intent=READY AND availability=now
+  → push immediate payment + link
+
+IF intent=PARTIAL
+  → ask amount → anchor + plan → PTP
+
+IF intent=DELAY
+  → extract exact date → PTP
+
+IF intent=REFUSAL AND attempts<3
+  → empathy + small-entry offer
+
+IF intent=REFUSAL AND attempts≥3
+  → mark HARD_REFUSAL → schedule later / escalate
+
+IF intent=DISPUTE
+  → open ticket + request partial
+ 
+⸻
+ 
+📊 8) Metrics to Track (Operational)
+	•	PTP Rate (% of connected calls)
+	•	Same-day Payment Rate
+	•	Avg. Attempts per PTP
+	•	Refusal → Conversion rate (2nd/3rd attempt)
+	•	Latency per turn
+	•	Compliance flags (must be zero critical)
+ 
+⸻
+ 
+🎯 9) What Actually Drives Success
+	•	Fast intent classification (≤1–2 turns)
+	•	Converting vague answers → exact commitments
+	•	Micro-payment entry strategy
+	•	Consistent follow-up on PTP
+ 
+⸻
+
+	•	LLM prompt + system rules (ready to deploy)
+	•	API-level workflow (events, payloads, webhooks)
+	•	Training dataset (Arabic phrases → intents → responses)
+Pick the layer you want to implement next.

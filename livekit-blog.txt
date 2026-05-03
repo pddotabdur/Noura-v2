@@ -1,0 +1,1486 @@
+Collect structured data with LiveKit Agents
+
+Voice and chat agents are increasingly used for workflows that aren't open-ended: qualify a lead, run patient intake, gather booking details, confirm a service request, follow up with a survey. The goal is not to have a freeform conversation; it's a structured record you can act on at the end of every call.
+
+Prompt-only agents struggle with this use case. To reliably collect a defined dataset and submit the result somewhere deterministic, developers usually end up stitching together tool calls for structured extraction, end-of-call detection, and result delivery.
+
+Guided data collection flows are now a first-class pattern with LiveKit Agents, and there are two ways to build one:
+
+In code, using Tasks and TaskGroups in the Agents SDKs.
+In your browser, using Data collection mode in Agent Builder.
+Both paths produce the same kind of agent: one with a defined objective that keeps the conversation on track, captures the user's responses, and yields control when the work is done. Agent Builder compiles down to the same Tasks and TaskGroups primitives the SDKs expose, so picking one path now doesn't lock you out of the other later.
+
+Path 1: Tasks and TaskGroups in the Agents SDKs
+AgentTask is the primitive for structured conversational work in the Python and TypeScript Agents SDKs. A task is a focused, reusable unit that takes control of the session, completes a specific objective, and returns a typed result to the agent that started it. Tasks have full support for tools, just like an agent.
+
+Here is a simple task that asks for recording consent and returns a boolean:
+from livekit.agents import AgentTask, function_tool
+
+class CollectConsent(AgentTask[bool]):
+    def __init__(self, chat_ctx=None):
+        super().__init__(
+            instructions="""
+            Ask for recording consent and get a clear yes or no answer.
+            Be polite and professional.
+            """,
+            chat_ctx=chat_ctx,
+        )
+
+    async def on_enter(self) -> None:
+        await self.session.generate_reply(
+            instructions="""
+            Briefly introduce yourself, then ask for permission to record
+            the call for quality assurance and training purposes.
+            Make it clear that they can decline.
+            """
+        )
+
+    @function_tool
+    async def consent_given(self) -> None:
+        """Use this when the user gives consent to record."""
+        self.complete(True)
+
+    @function_tool
+    async def consent_denied(self) -> None:
+        """Use this when the user denies consent to record."""
+        self.complete(False)
+
+
+An agent runs the task by awaiting it, and uses the returned value to decide what to do next:
+
+from livekit.agents import Agent
+
+class CustomerServiceAgent(Agent):
+    def __init__(self):
+        super().__init__(
+            instructions="You are a friendly customer service representative."
+        )
+
+    async def on_enter(self) -> None:
+        if await CollectConsent(chat_ctx=self.chat_ctx):
+            await self.session.generate_reply(
+                instructions="Offer your assistance to the user."
+            )
+        else:
+            await self.session.generate_reply(
+                instructions="Inform the user that you cannot proceed."
+            )
+For multi-step flows, the framework provides TaskGroup, an ordered sequence of tasks that share conversation context, support backtracking to earlier steps, and return all their results together when the group finishes:
+
+from livekit.agents.beta.workflows import TaskGroup
+
+task_group = TaskGroup(chat_ctx=self.chat_ctx)
+
+task_group.add(
+    lambda: IntroTask(),
+    id="intro_task",
+    description="Collects name and introduction",
+)
+task_group.add(
+    lambda: CommuteTask(),
+    id="commute_task",
+    description="Asks about commute flexibility",
+)
+
+results = await task_group
+task_results = results.task_results
+# {
+#   "intro_task": IntroResults(name="...", intro="..."),
+#   "commute_task": CommuteResults(can_commute=True, commute_method="subway"),
+# }
+TaskGroups handle the messy parts of real conversations. If a user wants to correct an earlier answer mid-flow, the group can regress to that task while keeping the rest of the context intact. When the group finishes, its conversation is summarized and passed back to the controlling agent so the session continues naturally.
+(base) abdur@gargantua:~/Desktop/GITHUB/agent-skills$ claude code
+Tip: You can launch Claude Code with just `claude`
+ ▐▛███▜▌   Claude Code v2.1.126
+▝▜█████▛▘  Sonnet 4.6 with high effort · Claude Pro
+  ▘▘ ▝▝    ~/Desktop/GITHUB/agent-skills
+
+❯ /model                                                                        
+  ⎿  Set model to Sonnet 4.6 (default)
+                                                                                
+❯ /model claude-opus-4-6[1m]                                                    
+  ⎿  Opus with 1M context is not available for your account. Learn more:        
+     https://code.claude.com/docs/en/model-config#extended-context-with-1m      
+                                                                                
+────────────────────────────────────────────────────────────────────────────────
+❯                                                                               
+────────────────────────────────────────────────────────────────────────────────
+  Press Ctrl-C again to exit                                                    
+                                                                                
+Resume this session with:                                                       
+claude --resume e8dfb51e-7574-468b-a619-09d9edc73cbf                            
+(base) abdur@gargantua:~/Desktop/GITHUB/agent-skills$ export ANTHROPIC_MODEL="claude-opus-4-6[1m]"
+
+(base) abdur@gargantua:~/Desktop/GITHUB/agent-skills$ claude code
+Tip: You can launch Claude Code with just `claude`
+ ▐▛███▜▌   Claude Code v2.1.126
+▝▜█████▛▘  Opus 4.6 (1M context) with high effort · Claude Pro
+  ▘▘ ▝▝    ~/Desktop/GITHUB/agent-skills
+
+────────────────────────────────────────────────────────────────────────────────
+❯  
+────────────────────────────────────────────────────────────────────────────────
+  Press Ctrl-C again to exit                                    ⧉ In README.md
+(base) abdur@gargantua:~/Desktop/GITHUB/agent-skills$ claude --plugin-dir /home/abdur/Desktop/GITHUB/agent-skills
+ ▐▛███▜▌   Claude Code v2.1.126
+▝▜█████▛▘  Opus 4.6 (1M context) with high effort · Claude Pro
+  ▘▘ ▝▝    ~/Desktop/GITHUB/agent-skills
+
+────────────────────────────────────────────────────────────────────────────────
+❯  
+────────────────────────────────────────────────────────────────────────────────
+  Press Ctrl-C again to exit                                    ⧉ In README.md
+                                                              ● high · /effort
+(base) abdur@gargantua:~/Desktop/GITHUB/agent-skills$ cd ..
+(base) abdur@gargantua:~/Desktop/GITHUB$ cd..
+cd..: command not found
+(base) abdur@gargantua:~/Desktop/GITHUB$ cd ..
+(base) abdur@gargantua:~/Desktop$ ls
+ AbdurRahman_FInals_NUST_MS_Thesis.pdf   nust-seeklogo.png
+ call_packet.tar.gz                      PKG
+ call.pcap                               RAG
+ clawdbot.pem                            rag-tutorial-v2
+ cv                                      rag_work
+ devsort                                 Repos
+ devsort_api_key.txt                     Tawfq_Projects
+ GITHUB                                 'Thesis All Work'
+ huxley_RAG                              Unified
+'In-house Presentation_v2.pdf'           USB_backup
+ n8n_automation_project.png              voice_agents
+(base) abdur@gargantua:~/Desktop$ cd Tawfq_Projects/
+(base) abdur@gargantua:~/Desktop/Tawfq_Projects$ ls
+'AI Debt Collection Voice Agent tech stack and breakdown.pdf'
+ Arabic_Debt_Recovery.odg
+ Arabic_Debt_Recovery.pdf
+ Claw_livekit_agent
+ debt_collector
+ Debt_Collector2
+ financial_breakdown.md
+ latency_dia.png
+ nora-debt-livekit-agent-main
+ nora-debt-livekit-agent-main.zip
+ Pathway_v1.json
+ Revised_Arabic_Debt_Recovery.pdf
+ sip
+ Tawafoq
+ test_debt_collector
+'كراسة الشروط والمواصفات.pdf'
+ نورا---مساعد-تحصيل-الديون
+(base) abdur@gargantua:~/Desktop/Tawfq_Projects$ cd Noura-v2/
+(base) abdur@gargantua:~/Desktop/Tawfq_Projects/Noura-v2$ uv init
+Initialized project `noura-v2`
+(base) abdur@gargantua:~/Desktop/Tawfq_Projects/Noura-v2$ uv sync
+Using CPython 3.13.9 interpreter at: /home/abdur/miniconda3/bin/python3
+Creating virtual environment at: .venv
+Resolved 1 package in 27ms
+Audited in 0.00ms
+╭─── Claude Code v2.1.126 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                                                                        │
+│                Welcome back Claude!                │ Run /init to create a CLAUDE.md file with instructions for Claude                               │
+│                                                    │ ─────────────────────────────────────────────────────────────────────────────────────────────── │
+│                       ▐▛███▜▌                      │ What's new                                                                                      │
+│                      ▝▜█████▛▘                     │ The `/model` picker now lists models from your gateway's `/v1/models` endpoint when `ANTHROPIC… │
+│                        ▘▘ ▝▝                       │ - Added `claude project purge [path]` to delete all Claude Code state for a project (transcrip… │
+│   Opus 4.6 (1M context) with hi… · Claude Pro ·    │ `--dangerously-skip-permissions` now bypasses prompts for writes to `.claude/`, `.git/`, `.vsc… │
+│   zeeeyshan@gmail.com's Organization               │ /release-notes for more                                                                         │
+│         ~/Desktop/Tawfq_Projects/Noura-v2          │                                                                                                 │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+❯ i am making a livkit phone agent and have a already a working model in shape of @smart_agent.py. but i am asked to add full functionality as          
+  discussed in @call-flow.txt . please revise the project and make it complete. but remember that latency is my bigger concern. i have also put a guide 
+   on use of livekit tasks and task groups. you can revise the whole current code elements/architecure if it is suboptical or you deem it needs a       
+  change.                                                                                                                                               
+  ⎿  Read smart_agent.py (1458 lines)                                                                                                                   
+  ⎿  Read call-flow.txt (258 lines)                                                                                                                     
+  ⎿  API Error: Extra usage is required for 1M context · run /extra-usage to enable, or /model to switch to standard context                            
+                                                                                                                                                        
+✻ Sautéed for 0s                                                                                                                                        
+                                                                                                                                                        
+  change.                                                                                                                                               
+  ⎿  Read smart_agent.py (1458 lines)
+  ⎿  Read call-flow.txt (258 lines)
+  ⎿  API Error: Extra usage is required for 1M context · run /extra-usage to enable, or /model to switch to standard context
+
+✻ Sautéed for 0s
+
+❯ i am making a livkit phone agent and have a already a working model in shape of @smart_agent.py. but i am asked to add full functionality as          
+  discussed in @call-flow.txt . please revise the project and make it complete. but remember that latency is my bigger concern. i have also put a guide 
+   on use of livekit tasks and task groups. you can revise the whole current code elements/architecure if it is suboptical or you deem it needs a       
+  change.                                                                                                                                               
+  ⎿  Read smart_agent.py (unchanged)
+  ⎿  Read call-flow.txt (unchanged)
+  ⎿  API Error: Extra usage is required for 1M context · run /extra-usage to enable, or /model to switch to standard context
+
+✻ Churned for 0s
+
+❯ i am making a livkit phone agent and have a already a working model in shape of @smart_agent.py. but i am asked to add full functionality as          
+  discussed in @call-flow.txt . please revise the project and make it complete. but remember that latency is my bigger concern. i have also put a guide 
+   on use of livekit tasks and task groups. you can revise the whole current code elements/architecure if it is suboptical or you deem it needs a       
+  change.                                                                                                                                               
+  ⎿  Read smart_agent.py (unchanged)
+  ⎿  Read call-flow.txt (unchanged)
+  ⎿  API Error: Extra usage is required for 1M context · run /extra-usage to enable, or /model to switch to standard context
+
+✻ Sautéed for 0s
+
+❯ /model                                                                                                                                                
+  ⎿  Set model to Opus 4.7
+
+❯ i am making a livkit phone agent and have a already a working model in shape of @smart_agent.py. but i am asked to add full functionality as          
+  discussed in @call-flow.txt . please revise the project and make it complete. but remember that latency is my bigger concern. i have also put a guide 
+   on use of livekit tasks and task groups. you can revise the whole current code elements/architecure if it is suboptical or you deem it needs a       
+  change.                                                                                                                                               
+  ⎿  Read smart_agent.py (unchanged)
+  ⎿  Read call-flow.txt (unchanged)                                                                                                                     
+                                                                                                                                                        
+  Read 3 files, listed 1 directory (ctrl+o to expand)     
+                                                                                           
+● I'll review the current code and the call-flow requirements, then revise. Key gaps in smart_agent.py vs call-flow.txt:
+                                                                                                                                                        
+  1. EC-3 — ID verify failure has no DOB fallback; just retries then closes.                                                                            
+  2. EC-4 — no anger/escalation/transfer path.                                                                                                          
+  3. EC-5 — dispute closes immediately; no "pay undisputed portion" parallel ask.                                                                       
+  4. EC-6 — refusal closes on the first refusal; no 3-step ladder before HARD_REFUSAL.                                                                  
+  5. EC-1 — voicemail just hangs up; no compliant message + SMS callback card.                                                                          
+  6. HP-1/2 — no SMS payment link side-effect after PTP.                                                                                                
+  7. No structured outcome log for downstream (PTP enforcement, retry cadence).                                                                         
+                                                                                                                                                        
+  Architecture-wise, the existing sub-agent + tool-return pattern is good for latency (it preserves the cached PERSONA prefix across stages — switching 
+  to TaskGroup would add a summarization LLM call per group exit, so I'll keep it). I'll add the missing functionality in-place.                        
+                                                                                                                                                        
+  Let me make targeted edits.                                                                                                                           
+  
+● Update(smart_agent.py)                                                                                                                                
+                                                                                           
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Edit file                                                                                                                                              
+ smart_agent.py
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ 104      amount: str = "10000"
+ 105      debt_date: str = "2023-01-01"                                                                                                                 
+ 106      national_id_last4: str = "1234"        
+ 107 +    dob: str = "1990-01-01"  # ISO YYYY-MM-DD, fallback verifier                                                                                  
+ 108 +    phone_number: str | None = None  # for SMS / payment link side-effects                                                                        
+ 109    
+ 110      identity_confirmed: bool = False
+ 111      id_verified: bool = False
+ 110 -    outcome: str | None = None  # "paid" | "committed" | "rescheduled" | "refusal" | "dispute" | "dnc" | "death" | "busy" | "wrong_party"         
+ 112 +    dob_verified: bool = False                                                                                                                    
+ 113 +    outcome: str | None = None  # see _emit_outcome for the full vocabulary                                                                       
+ 114      commitment: str | None = None  # free-form description set by the LLM
+ 115      callback_time: str | None = None
+ 116      referrer_mobile: str | None = None  # set when wrong-party knows the person
+ 117  
+ 118 +    # Ladder counters — used to drive EC-4 (anger) and EC-6 (refusal) flows                                                                       
+ 119 +    refusal_attempts: int = 0                                                                                                                     
+ 120 +    angry_attempts: int = 0                                                                                                                       
+ 121 +    dispute_open: bool = False                                                                                                                    
+ 122 +    payment_link_sent: bool = False                                                                                                               
+ 123 +                                                                                                                                                  
+ 124      sip_ready: asyncio.Event = field(default_factory=asyncio.Event)
+ 125      participant: rtc.RemoteParticipant | None = None
+ 126  
+ 127  
+ 128 +# ---------- Side-effect hooks (replace stubs with real integrations) ----------                                                                  
+ 129 +#                                                                                                                                                 
+ 130 +# Every disposition the call can end on is logged via _emit_outcome so a                                                                          
+ 131 +# downstream worker can drive PTP reminder scheduling (T-24h, T-2h, T+0),                                                                         
+ 132 +# retry cadence, dispute ticketing, and DNC suppression off a single stream.                                                                      
+ 133 +                                                                                                                                                  
+ 134 +def _emit_outcome(data: "CallData", kind: str, **fields) -> None:                                                                                 
+ 135 +    payload = {                                                                                                                                   
+ 136 +        "customer": data.customer_name,                                                                                                           
+ 137 +        "phone": data.phone_number,                                                                                                               
+ 138 +        "kind": kind,                                                                                                                             
+ 139 +        **fields,                                                                                                                                 
+ 140 +    }                                                                                                                                             
+
+❯ i am making a livkit phone agent and have a already a working model in shape of @smart_agent.py. but i am asked to add full functionality as          
+  discussed in @call-flow.txt . please revise the project and make it complete. but remember that latency is my bigger concern. i have also put a guide 
+   on use of livekit tasks and task groups. you can revise the whole current code elements/architecure if it is suboptical or you deem it needs a       
+  change.                                                                                                                                               
+  ⎿  Read smart_agent.py (unchanged)
+  ⎿  Read call-flow.txt (unchanged)
+
+  Read 3 files, listed 1 directory (ctrl+o to expand)
+
+● I'll review the current code and the call-flow requirements, then revise. Key gaps in smart_agent.py vs call-flow.txt:
+
+  1. EC-3 — ID verify failure has no DOB fallback; just retries then closes.
+  2. EC-4 — no anger/escalation/transfer path.
+  3. EC-5 — dispute closes immediately; no "pay undisputed portion" parallel ask.
+  4. EC-6 — refusal closes on the first refusal; no 3-step ladder before HARD_REFUSAL.
+  5. EC-1 — voicemail just hangs up; no compliant message + SMS callback card.
+  6. HP-1/2 — no SMS payment link side-effect after PTP.
+  7. No structured outcome log for downstream (PTP enforcement, retry cadence).
+
+  Architecture-wise, the existing sub-agent + tool-return pattern is good for latency (it preserves the cached PERSONA prefix across stages — switching
+  to TaskGroup would add a summarization LLM call per group exit, so I'll keep it). I'll add the missing functionality in-place.
+
+  Let me make targeted edits.
+
+● Update(smart_agent.py)
+  ⎿  Added 49 lines, removed 1 line
+      104      amount: str = "10000"
+      105      debt_date: str = "2023-01-01"                                               
+      106      national_id_last4: str = "1234"
+      107 +    dob: str = "1990-01-01"  # ISO YYYY-MM-DD, fallback verifier                                                                             
+      108 +    phone_number: str | None = None  # for SMS / payment link side-effects                                                            
+      109                                                                                                                                               
+      110      identity_confirmed: bool = False                                                                                                       
+      111      id_verified: bool = False
+      110 -    outcome: str | None = None  # "paid" | "committed" | "rescheduled" | "refusal" | "dispute" | "dnc" | "death" | "busy" | "wrong_par
+          -ty"                                                                                                                                   
+      112 +    dob_verified: bool = False                                                                                                        
+      113 +    outcome: str | None = None  # see _emit_outcome for the full vocabulary                                                           
+      114      commitment: str | None = None  # free-form description set by the LLM
+      115      callback_time: str | None = None
+      116      referrer_mobile: str | None = None  # set when wrong-party knows the person
+      117  
+      118 +    # Ladder counters — used to drive EC-4 (anger) and EC-6 (refusal) flows                                                           
+      119 +    refusal_attempts: int = 0                                                                                                         
+      120 +    angry_attempts: int = 0                                                                                                           
+      121 +    dispute_open: bool = False                                                                                                        
+      122 +    payment_link_sent: bool = False                                                                                                   
+      123 +                                                                                                                                      
+      124      sip_ready: asyncio.Event = field(default_factory=asyncio.Event)
+      125      participant: rtc.RemoteParticipant | None = None
+      126  
+      127  
+      128 +# ---------- Side-effect hooks (replace stubs with real integrations) ----------                                                      
+      129 +#                                                                                                                                     
+      130 +# Every disposition the call can end on is logged via _emit_outcome so a                                                              
+      131 +# downstream worker can drive PTP reminder scheduling (T-24h, T-2h, T+0),                                                             
+      132 +# retry cadence, dispute ticketing, and DNC suppression off a single stream.                                                          
+      133 +                                                                                                                                      
+      134 +def _emit_outcome(data: "CallData", kind: str, **fields) -> None:                                                                     
+      135 +    payload = {                                                                                                                       
+      136 +        "customer": data.customer_name,                                                                                               
+      137 +        "phone": data.phone_number,                                                                                                   
+      138 +        "kind": kind,                                                                                                                 
+      139 +        **fields,                                                                                                                     
+      140 +    }                                                                                                                                 
+      141 +    logger.info(f"OUTCOME {json.dumps(payload, ensure_ascii=False)}")                                                                 
+      142 +                                                                                                                                      
+      143 +                                                                                                                                      
+      144 +def _send_sms_payment_link(data: "CallData", when: str | None = None) -> None:                                                        
+      145 +    """Stub: SMS the customer a payment link / IBAN. Wire to provider."""                                                             
+      146 +    if not data.phone_number:                                                                                                         
+      147 +        return                                                                                                                        
+      148 +    logger.info(                                                                                                                      
+      149 +        f"SMS payment_link to={data.phone_number} "                                                                                   
+      150 +        f"amount={data.amount} when={when}"                                                                                           
+      151 +    )                                                                                                                                 
+      152 +    data.payment_link_sent = True                                                                                                     
+      153 +                                                                                                                                      
+      154 +                                                                                                                                      
+      155 +def _send_sms_callback_card(data: "CallData") -> None:                                                                                
+      156 +    """Stub: after voicemail / no-answer, SMS contact card + callback CTA."""                                                         
+      157 +    if not data.phone_number:                                                                                                         
+      158 +        return                                                                                                                        
+      159 +    logger.info(f"SMS callback_card to={data.phone_number}")                                                                          
+      160 +                                                                                                                                      
+      161 +                                                                                                                                      
+      162 +def _request_human_transfer(data: "CallData", reason: str) -> None:                                                                   
+      163 +    """Stub: route the live call to a human agent."""                                                                                 
+      164 +    logger.info(f"TRANSFER reason={reason} phone={data.phone_number}")                                                                
+      165 +                                                                                                                                      
+      166 +                                                                                                                                      
+      167  # ---------- Najdi pronunciation enforcement ----------
+      168  #
+      169  # Even though the LLM generates speech now, it still emits digits like
+
+● Now update PERSONA to mention escalation behavior briefly:
+                                                                                           
+● Update(smart_agent.py)            
+  ⎿  Added 11 lines                                                                                                                                     
+      326    section, CALL THE TOOL. Do not keep talking.
+      327  - For clarifications, reply in ONE short sentence and re-pose the                                                                            
+      328    current question without a tool.                                                                                                         
+      329 +                                                                                                                                             
+      330 +UNIVERSAL SAFETY TOOLS (available in every stage — call when triggered):                                                                   
+      331 +- voicemail_detected: if you hear an answering-machine greeting / beep                                                                       
+      332 +  instead of a live person.                                                                                                                
+      333 +- customer_angry: if the customer is shouting, hostile, abusive, or asks                                                              
+      334 +  for a human / supervisor. Do NOT argue back. Hand off to escalation.                                                                
+      335 +                                                                                                                                      
+      336 +COMPLIANCE:                                                                                                                           
+      337 +- Until identity is verified, NEVER disclose the debt amount, debt date,                                                              
+      338 +  or any account detail.                                                                                                              
+      339 +- No threats, no legal scare language, no oaths.                                                                                      
+      340  """
+      341  
+      342  
+
+● Now updating BaseCallAgent to add a compliant voicemail message and a universal customer_angry tool:
+                                                                                           
+● Update(smart_agent.py)                                                         
+  ⎿  Added 45 lines, removed 3 lines                                                                                                                    
+      424      @function_tool()                                                                                                                         
+      425      async def voicemail_detected(self, ctx: RunContext[CallData]):                                                                           
+      426          """Call this if you hear a voicemail / answering-machine greeting                                                                    
+      427 -        instead of a live person. Hangs up immediately."""                                                                                   
+      428 -        logger.info("voicemail detected, hanging up")                                                                                        
+      429 -        await self.hangup()                                                                                                                  
+      427 +        instead of a live person. Leaves a brief compliant message                                                                           
+      428 +        (no debt details), triggers an SMS callback card, then hangs up."""                                                           
+      429 +        logger.info("voicemail detected")                                                                                                    
+      430 +        ctx.userdata.outcome = "voicemail"                                                                                            
+      431 +        _emit_outcome(ctx.userdata, "voicemail")                                                                                             
+      432 +        _send_sms_callback_card(ctx.userdata)                                                                                         
+      433 +        try:                                                                                                                          
+      434 +            self.session.input.set_audio_enabled(False)                                                                               
+      435 +        except Exception:                                                                                                             
+      436 +            pass                                                                                                                      
+      437 +        handle = self.session.generate_reply(                                                                                         
+      438 +            instructions=(                                                                                                            
+      439 +                "Leave a brief voicemail in Najdi Arabic — identify as نورا "                                                         
+      440 +                "from شركة توافق, ask the customer to call back on the company "                                                      
+      441 +                "number, thank him. NO debt details, NO amounts. ONE short "                                                          
+      442 +                "sentence."                                                                                                           
+      443 +            ),                                                                                                                        
+      444 +            allow_interruptions=False,                                                                                                
+      445 +        )                                                                                                                             
+      446 +        try:                                                                                                                          
+      447 +            await handle.wait_for_playout()                                                                                           
+      448 +        except AttributeError:                                                                                                        
+      449 +            try:                                                                                                                      
+      450 +                await handle                                                                                                          
+      451 +            except Exception:                                                                                                         
+      452 +                pass                                                                                                                  
+      453 +        except Exception as e:                                                                                                        
+      454 +            logger.warning(f"voicemail playout error: {e}")                                                                           
+      455 +        try:                                                                                                                          
+      456 +            await self.hangup()                                                                                                       
+      457 +        except Exception as e:                                                                                                        
+      458 +            logger.warning(f"voicemail hangup race ignored: {e}")                                                                     
+      459  
+      460 +    @function_tool()                                                                                                                  
+      461 +    async def customer_angry(self, ctx: RunContext[CallData]):                                                                        
+      462 +        """Customer is shouting, hostile, abusive, or asks for a human /                                                              
+      463 +        supervisor. Routes to de-escalation; on the second event the call                                                             
+      464 +        is transferred to a live agent."""                                                                                            
+      465 +        ctx.userdata.angry_attempts += 1                                                                                              
+      466 +        if ctx.userdata.angry_attempts >= 2:                                                                                          
+      467 +            ctx.userdata.outcome = "escalated"                                                                                        
+      468 +            _request_human_transfer(ctx.userdata, "anger_persisting")                                                                 
+      469 +            _emit_outcome(ctx.userdata, "escalated")                                                                                  
+      470 +            return ClosingAgent(self.data, intent="escalated", chat_ctx=None)                                                         
+      471 +        return EscalationAgent(self.data, chat_ctx=None)                                                                              
+      472  
+      473 +                                                                                                                                      
+      474  # ---------- Stage 1: Right-party verification ----------
+      475  
+      476  STAGE1_TASK = """\
+
+● Now replace IDVerifyAgent with the DOB-fallback flow and add DOBVerifyAgent. Also add a does_not_know_person outcome log:
+                                                           
+● Update(smart_agent.py)                                               
+  ⎿  Added 1 line                                          
+      728      async def does_not_know_person(self, ctx: RunContext[CallData]):
+      729          """Caller does not know the named person."""
+      730          ctx.userdata.outcome = "wrong_party"
+      731 +        _emit_outcome(ctx.userdata, "contact_invalid")                                                                                
+      732          return ClosingAgent(self.data, intent="wrong_party", chat_ctx=None)                                                                  
+      733              
+      734                                                                                                                                               
+                                                                                   
+● Update(smart_agent.py)                                                                                                                                
+  ⎿  Added 1 line                                                                  
+      785      async def refuses_to_provide(self, ctx: RunContext[CallData]):                                                                           
+      786          """Caller declined to share a number."""                        
+      787          ctx.userdata.outcome = "wrong_party"
+      788 +        _emit_outcome(ctx.userdata, "contact_invalid")                                                                                
+      789          return ClosingAgent(self.data, intent="wrong_party", chat_ctx=None)
+      790              
+      791                                                                                                                                               
+  
+● Now replace the IDVerifyAgent's instructions (add refuses_to_verify doc) and the body (DOB fallback after first mismatch):                            
+                                                                                   
+● Update(smart_agent.py)                                                                                                                                
+  ⎿  Added 104 lines, removed 18 lines                                             
+      803    ASCII string. Convert Arabic-word numbers to digit characters
+      804    ('واحد اثنين ثلاثة أربعة' → '1234'). If the customer says them as one
+      805    number (e.g. 'ألف ومئتين وأربعة وثلاثين' or '١٢٣٤'), still pass '1234'.
+      806 -- unclear: customer asked to repeat / refused / gave fewer than 4 digits /                                                            
+      807 -  off-topic. Use whenever no clear 4-digit answer is given. Never guess.                                                                     
+      806 +- unclear: customer asked to repeat / gave fewer than 4 digits / off-topic.                                                           
+      807 +  Use whenever no clear 4-digit answer is given. Never guess.                                                                                
+      808 +- refuses_to_verify: customer flatly refuses to share verification details                                                            
+      809 +  ("ما أعطيك", "ما أعطي معلوماتي", "مين أنتي أصلاً").                                                                                        ─
+      810                                                                          
+      811  The stored last-4 digits are in the call data; you do NOT speak them.                                                                        
+      810 -The system compares server-side and re-asks or ends if mismatched.                                                                    
+      812 +On a single mismatch, the system silently switches to date-of-birth as                                                                
+      813 +an alternate verification method. Until verification succeeds, you must                                                               
+      814 +NOT mention the debt, amount, or due date.                                                                                            
+      815  """
+      816  
+      817  
+      818  class IDVerifyAgent(BaseCallAgent):
+      815 -    # First mismatch is forgiven (single-digit STT mishears happen). Second                                                           
+      816 -    # mismatch ends the call. Unclear replies do not consume an attempt.                                                              
+      817 -    MAX_ATTEMPTS = 2                                                                                                                  
+      818 -                                                                                                                                      
+      819      def __init__(self, data: CallData, *, chat_ctx: ChatContext | None = None) -> None:
+      820          super().__init__(
+      821              instructions=stage_instructions(
+     ...
+      825              chat_ctx=chat_ctx,
+      826          )
+      827          self.data = data
+      828 -        self._attempts = 0                                                                                                            
+      828  
+      829      async def on_enter(self):
+      830          self.session.generate_reply(
+     ...
+      856              ctx.userdata.id_verified = True
+      857              return Stage2DebtIntroAgent(self.data, chat_ctx=None)
+      858  
+      860 -        self._attempts += 1                                                                                                           
+      861 -        if self._attempts >= self.MAX_ATTEMPTS:                                                                                       
+      862 -            ctx.userdata.outcome = "id_mismatch"                                                                                      
+      863 -            return ClosingAgent(self.data, intent="id_mismatch", chat_ctx=None)                                                       
+      859 +        # Single mismatch — switch to DOB fallback (EC-3) instead of                                                                  
+      860 +        # making the customer re-guess his own ID. Do NOT disclose any                                                                
+      861 +        # debt detail in the meantime.                                                                                                
+      862 +        return DOBVerifyAgent(self.data, chat_ctx=None)                                                                               
+      863  
+      864 +    @function_tool()                                                                                                                  
+      865 +    async def unclear(self, ctx: RunContext[CallData]):                                                                               
+      866 +        """Customer asked to repeat or didn't give a clear 4-digit reply."""                                                          
+      867          self.session.generate_reply(
+      868              instructions=(
+      867 -                "The digits did not match. Apologize politely and ask the "                                                           
+      868 -                "customer to repeat the last 4 digits one more time. "                                                                
+      869 -                "One short sentence."                                                                                                 
+      869 +                "Politely re-ask for the last 4 digits of the national ID, "                                                          
+      870 +                "slowly. One short sentence."                                                                                         
+      871              )
+      872          )
+      873  
+      874      @function_tool()
+      875 +    async def refuses_to_verify(self, ctx: RunContext[CallData]):                                                                     
+      876 +        """Customer refuses verification entirely."""                                                                                 
+      877 +        ctx.userdata.outcome = "verify_refused"                                                                                       
+      878 +        _emit_outcome(ctx.userdata, "verify_refused")                                                                                 
+      879 +        return ClosingAgent(self.data, intent="verify_refused", chat_ctx=None)                                                        
+      880 +                                                                                                                                      
+      881 +                                                                                                                                      
+      882 +# ---------- Stage 1d-bis: Alternate verification via DOB (EC-3) ----------                                                           
+      883 +                                                                                                                                      
+      884 +DOB_VERIFY_TASK = """\                                                                                                                
+      885 +Current stage: 1d-bis — alternate verification via date of birth.                                                                     
+      886 +                                                                                                                                      
+      887 +The first answer didn't match. Without saying that explicitly, ask                                                                    
+      888 +politely for the customer's date of birth (تاريخ الميلاد بالميلادي) as                                                                
+      889 +an alternative way to confirm identity. ONE short sentence.                                                                           
+      890 +                                                                                                                                      
+      891 +Then call exactly one tool:                                                                                                           
+      892 +- dob_provided(yyyy_mm_dd): customer spoke a date. Pass ISO YYYY-MM-DD,                                                               
+      893 +  converting Arabic words / hijri references where you can. If you only                                                               
+      894 +  have year + month, pass YYYY-MM-01 — the system tolerates day mismatch.                                                             
+      895 +- unclear: customer didn't give a clear date / asked to repeat.                                                                       
+      896 +- refuses_to_verify: customer refuses any further verification.                                                                       
+      897 +                                                                                                                                      
+      898 +Until identity is verified you must NOT disclose the debt amount or                                                                   
+      899 +debt date. Do not invent any account details.                                                                                         
+      900 +"""                                                                                                                                   
+      901 +                                                                                                                                      
+      902 +                                                                                                                                      
+      903 +class DOBVerifyAgent(BaseCallAgent):                                                                                                  
+      904 +    def __init__(self, data: CallData, *, chat_ctx: ChatContext | None = None) -> None:                                               
+      905 +        super().__init__(                                                                                                             
+      906 +            instructions=stage_instructions(data, DOB_VERIFY_TASK),                                                                   
+      907 +            chat_ctx=chat_ctx,                                                                                                        
+      908 +        )                                                                                                                             
+      909 +        self.data = data                                                                                                              
+      910 +                                                                                                                                      
+      911 +    async def on_enter(self):                                                                                                         
+      912 +        self.session.generate_reply(                                                                                                  
+      913 +            instructions=(                                                                                                            
+      914 +                "Apologize briefly that the previous answer didn't match, "                                                           
+      915 +                "then ask politely for his date of birth as an alternative. "                                                         
+      916 +                "ONE short sentence."                                                                                                 
+      917 +            )                                                                                                                         
+      918 +        )                                                                                                                             
+      919 +                                                                                                                                      
+      920 +    @staticmethod                                                                                                                     
+      921 +    def _normalize_iso(s: str) -> str | None:                                                                                         
+      922 +        s = (s or "").translate(_AR_INDIC_DIGITS).strip()                                                                             
+      923 +        m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})$", s)                                                                             
+      924 +        if not m:                                                                                                                     
+      925 +            return None                                                                                                               
+      926 +        y, mo, d = (int(x) for x in m.groups())                                                                                       
+      927 +        try:                                                                                                                          
+      928 +            datetime.date(y, mo, d)                                                                                                   
+      929 +        except ValueError:                                                                                                            
+      930 +            return None                                                                                                               
+      931 +        return f"{y:04d}-{mo:02d}-{d:02d}"                                                                                            
+      932 +                                                                                                                                      
+      933 +    @function_tool()                                                                                                                  
+      934 +    async def dob_provided(self, ctx: RunContext[CallData], yyyy_mm_dd: str):                                                         
+      935 +        """Customer spoke a date of birth.                                                                                            
+      936 +                                                                                                                                      
+      937 +        Args:                                                                                                                         
+      938 +            yyyy_mm_dd: ISO YYYY-MM-DD. If only year+month known, pass                                                                
+      939 +                        YYYY-MM-01 (day mismatch is tolerated).                                                                       
+      940 +        """                                                                                                                           
+      941 +        spoken = self._normalize_iso(yyyy_mm_dd)                                                                                      
+      942 +        stored = self._normalize_iso(self.data.dob)                                                                                   
+      943 +        # Tolerant match: year + month only (day often misheard).                                                                     
+      944 +        if spoken and stored and spoken[:7] == stored[:7]:                                                                            
+      945 +            ctx.userdata.id_verified = True                                                                                           
+      946 +            ctx.userdata.dob_verified = True                                                                                          
+      947 +            return Stage2DebtIntroAgent(self.data, chat_ctx=None)                                                                     
+      948 +                                                                                                                                      
+      949 +        ctx.userdata.outcome = "id_mismatch"                                                                                          
+      950 +        _emit_outcome(ctx.userdata, "id_mismatch")                                                                                    
+      951 +        return ClosingAgent(self.data, intent="id_mismatch", chat_ctx=None)                                                           
+      952 +                                                                                                                                      
+      953 +    @function_tool()                                                                                                                  
+      954      async def unclear(self, ctx: RunContext[CallData]):
+      875 -        """Customer asked to repeat or didn't give a clear 4-digit reply."""                                                          
+      955 +        """Customer didn't give a clear date / asked to repeat."""                                                                    
+      956          self.session.generate_reply(
+      957              instructions=(
+      878 -                "Politely re-ask for the last 4 digits of the national ID, "                                                          
+      879 -                "slowly. One short sentence."                                                                                         
+      958 +                "Politely re-ask for date of birth, slowly. One short sentence."                                                      
+      959              )
+      960          )
+      961  
+      962 +    @function_tool()                                                                                                                  
+      963 +    async def refuses_to_verify(self, ctx: RunContext[CallData]):                                                                     
+      964 +        """Customer refuses any further verification."""                                                                              
+      965 +        ctx.userdata.outcome = "verify_refused"                                                                                       
+      966 +        _emit_outcome(ctx.userdata, "verify_refused")                                                                                 
+      967 +        return ClosingAgent(self.data, intent="verify_refused", chat_ctx=None)                                                        
+      968  
+      969 +                                                                                                                                      
+      970  # ---------- Stage 2: Debt intro & reason ----------
+      971  
+      972  STAGE2_TASK = """\
+
+● Now update Stage3NegotiationAgent — refusal ladder and dispute routing:    
+                                                 
+● Update(smart_agent.py)                                                     
+  ⎿  Added 29 lines, removed 6 lines                   
+      1164                                                                   
+      1165      @function_tool()                         
+      1166      async def refuses_payment(self, ctx: RunContext[CallData]):
+      1167 -        """Customer flatly refuses to pay."""                                                                                        
+      1168 -        ctx.userdata.outcome = "refusal"                                                                                                    
+      1169 -        return ClosingAgent(self.data, intent="refusal", chat_ctx=None)                                                              
+      1167 +        """Customer flatly refuses to pay. Drives the EC-6 ladder:                                                                          
+      1168 +        attempt 1 → empathy + smallest-entry ask, attempt 2 → soft                                                                   
+      1169 +        consequence (no threats), attempt 3+ → HARD_REFUSAL close."""                                                                       
+      1170 +        ctx.userdata.refusal_attempts += 1                                                                                           
+      1171 +        n = ctx.userdata.refusal_attempts                                                                                                   
+      1172 +        if n >= 3:                                                                                                                   
+      1173 +            ctx.userdata.outcome = "hard_refusal"                                                                                    
+      1174 +            _emit_outcome(ctx.userdata, "hard_refusal", attempts=n)                                                                  
+      1175 +            return ClosingAgent(self.data, intent="hard_refusal", chat_ctx=None)                                                     
+      1176 +        if n == 1:                                                                                                                   
+      1177 +            instructions = (                                                                                                         
+      1178 +                "ONE-word empathy ('أتفهم'), then ask softly what the SMALLEST "                                                     
+      1179 +                "amount he could manage today as a good-faith gesture would "                                                        
+      1180 +                "be — do NOT name a number yourself. ONE short sentence."                                                            
+      1181 +            )                                                                                                                        
+      1182 +        else:  # n == 2                                                                                                              
+      1183 +            instructions = (                                                                                                         
+      1184 +                "Briefly mention that without any commitment now the case "                                                          
+      1185 +                "will be returned to the bank per policy — NO threats, NO "                                                          
+      1186 +                "legal language. Then ask one last time if a token small "                                                           
+      1187 +                "payment today is possible. ONE short sentence."                                                                     
+      1188 +            )                                                                                                                        
+      1189 +        self.session.generate_reply(instructions=instructions)                                                                       
+      1190 +        return None                                                                                                                  
+      1191  
+      1192      @function_tool()
+      1193      async def disputes_debt(self, ctx: RunContext[CallData]):
+      1173 -        """Customer disputes the debt — wrong amount, not his, fraud."""                                                             
+      1174 -        ctx.userdata.outcome = "dispute"                                                                                             
+      1175 -        return ClosingAgent(self.data, intent="dispute", chat_ctx=None)                                                              
+      1194 +        """Customer disputes the debt — wrong amount, not his, fraud.                                                                
+      1195 +        Open a parallel dispute ticket and offer to start with any                                                                   
+      1196 +        non-disputed portion (EC-5)."""                                                                                              
+      1197 +        ctx.userdata.dispute_open = True                                                                                             
+      1198 +        return DisputeAgent(self.data, chat_ctx=None)                                                                                
+      1199  
+      1200      @function_tool()
+      1201      async def already_paid(self, ctx: RunContext[CallData]):
+
+● Now insert DisputeAgent and EscalationAgent before ClosingAgent:           
+                                                 
+● Update(smart_agent.py)                               
+  ⎿  Added 138 lines                                   
+      1352          return Stage3NegotiationAgent(self.data, chat_ctx=None)
+      1353                                               
+      1354                                               
+      1355 +# ---------- Dispute handling (EC-5) ----------                                                                                      
+      1356 +                                                                                                                                            
+      1357 +DISPUTE_TASK = """\                                                                                                                  
+      1358 +Current stage: dispute handling.                                                                                                            
+      1359 +                                                                                                                                     
+      1360 +The customer disputes the debt (wrong amount, not mine, fraud). Two                                                                         
+      1361 +parallel actions:                                                                                                                    
+      1362 +  1. Acknowledge briefly — a review will be opened by the back office.                                                                      
+      1363 +  2. Ask if he wants to pay any UNDISPUTED portion now in good faith                                                                 
+      1364 +     while the review proceeds.                                                                                                      
+      1365 +                                                                                                                                     
+      1366 +ONE short sentence. NEVER name a number first — let him propose.                                                                     
+      1367 +                                                                                                                                     
+      1368 +Then call exactly one tool:                                                                                                          
+      1369 +- accepts_undisputed(amount, when_iso): customer agrees to pay an                                                                    
+      1370 +  undisputed amount today/soon. Pass SAR amount and ISO date.                                                                        
+      1371 +- declines_partial: customer declines any payment until review.                                                                      
+      1372 +- still_disputing_only: customer keeps disputing without engaging on                                                                 
+      1373 +  partial — close with dispute outcome and back-office review.                                                                       
+      1374 +"""                                                                                                                                  
+      1375 +                                                                                                                                     
+      1376 +                                                                                                                                     
+      1377 +class DisputeAgent(BaseCallAgent):                                                                                                   
+      1378 +    def __init__(self, data: CallData, *, chat_ctx: ChatContext | None = None) -> None:                                              
+      1379 +        super().__init__(                                                                                                            
+      1380 +            instructions=stage_instructions(data, DISPUTE_TASK),                                                                     
+      1381 +            chat_ctx=chat_ctx,                                                                                                       
+      1382 +        )                                                                                                                            
+      1383 +        self.data = data                                                                                                             
+      1384 +                                                                                                                                     
+      1385 +    async def on_enter(self):                                                                                                        
+      1386 +        self.session.generate_reply(                                                                                                 
+      1387 +            instructions=(                                                                                                           
+      1388 +                "Acknowledge briefly that a review will be opened, then ask "                                                        
+      1389 +                "if he can pay any non-disputed portion now in good faith. "                                                         
+      1390 +                "ONE short sentence."                                                                                                
+      1391 +            )                                                                                                                        
+      1392 +        )                                                                                                                            
+      1393 +                                                                                                                                     
+      1394 +    @function_tool()                                                                                                                 
+      1395 +    async def accepts_undisputed(                                                                                                    
+      1396 +        self,                                                                                                                        
+      1397 +        ctx: RunContext[CallData],                                                                                                   
+      1398 +        amount: float,                                                                                                               
+      1399 +        when_iso: str,                                                                                                               
+      1400 +    ):                                                                                                                               
+      1401 +        """Customer agreed to pay an undisputed portion.                                                                             
+      1402 +                                                                                                                                     
+      1403 +        Args:                                                                                                                        
+      1404 +            amount: SAR amount the customer commits to pay.                                                                          
+      1405 +            when_iso: ISO YYYY-MM-DD payment date.                                                                                   
+      1406 +        """                                                                                                                          
+      1407 +        ctx.userdata.commitment = (                                                                                                  
+      1408 +            f"undisputed partial {int(amount)} SAR on {when_iso} "                                                                   
+      1409 +            f"(dispute under review)"                                                                                                
+      1410 +        )                                                                                                                            
+      1411 +        ctx.userdata.outcome = "dispute_partial"                                                                                     
+      1412 +        _emit_outcome(                                                                                                               
+      1413 +            ctx.userdata, "dispute_partial",                                                                                         
+      1414 +            amount=int(amount), when=when_iso,                                                                                       
+      1415 +        )                                                                                                                            
+      1416 +        return Stage4RecapAgent(self.data, chat_ctx=None)                                                                            
+      1417 +                                                                                                                                     
+      1418 +    @function_tool()                                                                                                                 
+      1419 +    async def declines_partial(self, ctx: RunContext[CallData]):                                                                     
+      1420 +        """Customer declines any payment until the review concludes."""                                                              
+      1421 +        ctx.userdata.outcome = "dispute"                                                                                             
+      1422 +        _emit_outcome(ctx.userdata, "dispute_open")                                                                                  
+      1423 +        return ClosingAgent(self.data, intent="dispute", chat_ctx=None)                                                              
+      1424 +                                                                                                                                     
+      1425 +    @function_tool()                                                                                                                 
+      1426 +    async def still_disputing_only(self, ctx: RunContext[CallData]):                                                                 
+      1427 +        """Customer keeps disputing without engaging on payment."""                                                                  
+      1428 +        ctx.userdata.outcome = "dispute"                                                                                             
+      1429 +        _emit_outcome(ctx.userdata, "dispute_open")                                                                                  
+      1430 +        return ClosingAgent(self.data, intent="dispute", chat_ctx=None)                                                              
+      1431 +                                                                                                                                     
+      1432 +                                                                                                                                     
+      1433 +# ---------- Escalation / de-escalation (EC-4) ----------                                                                            
+      1434 +                                                                                                                                     
+      1435 +ESCALATE_TASK = """\                                                                                                                 
+      1436 +Current stage: de-escalation.                                                                                                        
+      1437 +                                                                                                                                     
+      1438 +The customer is upset / hostile. Goal: lower the temperature. Slow your                                                              
+      1439 +pace. Acknowledge feelings briefly without being defensive. Do NOT push                                                              
+      1440 +numbers. Do NOT argue back. ONE short sentence per turn.                                                                             
+      1441 +                                                                                                                                     
+      1442 +Then call exactly one tool:                                                                                                          
+      1443 +- de_escalated: customer calmed and we can continue the negotiation.                                                                 
+      1444 +- escalate_to_human: customer is still upset / asks for a human or a                                                                 
+      1445 +  supervisor / abusive language. Transfer the call.                                                                                  
+      1446 +- end_call_safely: customer demands the call end / has clearly hung up.                                                              
+      1447 +"""                                                                                                                                  
+      1448 +                                                                                                                                     
+      1449 +                                                                                                                                     
+      1450 +class EscalationAgent(BaseCallAgent):                                                                                                
+      1451 +    def __init__(self, data: CallData, *, chat_ctx: ChatContext | None = None) -> None:                                              
+      1452 +        super().__init__(                                                                                                            
+      1453 +            instructions=stage_instructions(data, ESCALATE_TASK),                                                                    
+      1454 +            chat_ctx=chat_ctx,                                                                                                       
+      1455 +        )                                                                                                                            
+      1456 +        self.data = data                                                                                                             
+      1457 +                                                                                                                                     
+      1458 +    async def on_enter(self):                                                                                                        
+      1459 +        self.session.generate_reply(                                                                                                 
+      1460 +            instructions=(                                                                                                           
+      1461 +                "Acknowledge the customer's frustration briefly without "                                                            
+      1462 +                "being defensive, slow your pace, and ask whether you can "                                                          
+      1463 +                "continue calmly or transfer him to a human agent. ONE "                                                             
+      1464 +                "short sentence."                                                                                                    
+      1465 +            )                                                                                                                        
+      1466 +        )                                                                                                                            
+      1467 +                                                                                                                                     
+      1468 +    @function_tool()                                                                                                                 
+      1469 +    async def de_escalated(self, ctx: RunContext[CallData]):                                                                         
+      1470 +        """Customer calmed — resume the appropriate stage."""                                                                        
+      1471 +        if ctx.userdata.id_verified:                                                                                                 
+      1472 +            return Stage3NegotiationAgent(self.data, chat_ctx=None)                                                                  
+      1473 +        # Pre-verify anger: don't push further — close gracefully.                                                                   
+      1474 +        ctx.userdata.outcome = "ended_by_customer"                                                                                   
+      1475 +        return ClosingAgent(self.data, intent="ended_by_customer", chat_ctx=None)                                                    
+      1476 +                                                                                                                                     
+      1477 +    @function_tool()                                                                                                                 
+      1478 +    async def escalate_to_human(self, ctx: RunContext[CallData]):                                                                    
+      1479 +        """Transfer the call to a live human agent."""                                                                               
+      1480 +        ctx.userdata.outcome = "escalated"                                                                                           
+      1481 +        _request_human_transfer(ctx.userdata, "angry_or_requested")                                                                  
+      1482 +        _emit_outcome(ctx.userdata, "escalated")                                                                                     
+      1483 +        return ClosingAgent(self.data, intent="escalated", chat_ctx=None)                                                            
+      1484 +                                                                                                                                     
+      1485 +    @function_tool()                                                                                                                 
+      1486 +    async def end_call_safely(self, ctx: RunContext[CallData]):                                                                      
+      1487 +        """Customer wants to end the call now."""                                                                                    
+      1488 +        ctx.userdata.outcome = "ended_by_customer"                                                                                   
+      1489 +        _emit_outcome(ctx.userdata, "ended_by_customer")                                                                             
+      1490 +        return ClosingAgent(self.data, intent="ended_by_customer", chat_ctx=None)                                                    
+      1491 +                                                                                                                                     
+      1492 +                                                                                                                                     
+      1493  # ---------- Closing (parameterized by intent) ----------
+      1494  
+      1495  _CLOSING_HINTS = {
+
+● Now extend _CLOSING_HINTS with new intents and update ClosingAgent.on_enter to send SMS payment link + emit final outcome:
+                                                       
+● Update(smart_agent.py)                                                       
+  ⎿  Added 22 lines                                      
+      1542          "reviewed by the relevant team and someone will follow up, and "
+      1543          "say goodbye. ONE or TWO short sentences."
+      1544      ),                            
+      1545 +    "hard_refusal": (                                                                                                                
+      1546 +        "Acknowledge his decision a final time, briefly note the case will "                                                                
+      1547 +        "be returned to the bank per policy, and close respectfully. ONE "                                                           
+      1548 +        "short sentence. NO threats, NO legal language."                                                                                    
+      1549 +    ),                                                                                                                               
+      1550 +    "escalated": (                                                                                                                          
+      1551 +        "Reassure briefly that a colleague will follow up with him "                                                                 
+      1552 +        "shortly, thank him, and say goodbye. ONE short sentence."                                                                          
+      1553 +    ),                                                                                                                               
+      1554 +    "ended_by_customer": (                                                                                                           
+      1555 +        "Close politely with a brief goodbye. ONE short sentence."                                                                   
+      1556 +    ),                                                                                                                               
+      1557 +    "verify_refused": (                                                                                                              
+      1558 +        "Apologize briefly that you cannot continue without verification, "                                                          
+      1559 +        "invite him to call back on the official company number, and say "                                                           
+      1560 +        "goodbye. ONE or TWO short sentences. Do NOT mention any debt "                                                              
+      1561 +        "details."                                                                                                                   
+      1562 +    ),                                                                                                                               
+      1563  }
+      1564  
+      1565  
+      1566 +# Intents that should trigger an SMS payment link after the goodbye plays.                                                           
+      1567 +_PAYMENT_LINK_INTENTS = {"ok", "paid"}                                                                                               
+      1568 +                                                                                                                                     
+      1569 +                                                                                                                                     
+      1570  class ClosingAgent(BaseCallAgent):
+      1571      def __init__(
+      1572          self,
+
+● Now update ClosingAgent.on_enter to fire side-effects after the goodbye:     
+                          
+● Update(smart_agent.py)                                                       
+  ⎿  Added 22 lines                                      
+      1620          except Exception as e:                                     
+      1621              logger.warning(f"closing speech playout error: {e}")
+      1622                                    
+      1623 +        # Side effects fire AFTER the goodbye plays — never delay the audio.                                                         
+      1624 +        if self.intent in _PAYMENT_LINK_INTENTS or self.intent == "dispute" \                                                               
+      1625 +                and self.data.outcome == "dispute_partial":                                                                          
+      1626 +            _send_sms_payment_link(self.data, when=self.data.commitment)                                                                    
+      1627 +                                                                                                                                     
+      1628 +        # Final disposition — single record per call for downstream PTP                                                                     
+      1629 +        # reminders / retry cadence / DNC suppression.                                                                               
+      1630 +        _emit_outcome(                                                                                                                      
+      1631 +            self.data,                                                                                                               
+      1632 +            f"close_{self.intent}",                                                                                                  
+      1633 +            outcome=self.data.outcome,                                                                                               
+      1634 +            commitment=self.data.commitment,                                                                                         
+      1635 +            callback_time=self.data.callback_time,                                                                                   
+      1636 +            referrer_mobile=self.data.referrer_mobile,                                                                               
+      1637 +            refusal_attempts=self.data.refusal_attempts,                                                                             
+      1638 +            angry_attempts=self.data.angry_attempts,                                                                                 
+      1639 +            dispute_open=self.data.dispute_open,                                                                                     
+      1640 +            payment_link_sent=self.data.payment_link_sent,                                                                           
+      1641 +            id_verified=self.data.id_verified,                                                                                       
+      1642 +            dob_verified=self.data.dob_verified,                                                                                     
+      1643 +        )                                                                                                                            
+      1644 +                                                                                                                                     
+      1645          # Even with the mic disabled, hangup can race with stream teardown.
+      1646          # Either way the call is ending — swallow the engine-closed error.
+      1647          try:
+
+● Let me simplify the SMS condition — dispute_partial flows through Stage 4 → ClosingAgent with intent "ok", so it's already covered:
+                                                         
+● Update(smart_agent.py)                                                       
+  ⎿  Added 1 line, removed 2 lines                         
+      1621              logger.warning(f"closing speech playout error: {e}")   
+      1622                                                 
+      1623          # Side effects fire AFTER the goodbye plays — never delay the audio.
+      1624 -        if self.intent in _PAYMENT_LINK_INTENTS or self.intent == "dispute" \                                                        
+      1625 -                and self.data.outcome == "dispute_partial":                                                                                 
+      1624 +        if self.intent in _PAYMENT_LINK_INTENTS:                                                                                     
+      1625              _send_sms_payment_link(self.data, when=self.data.commitment)                                                                    
+      1626                                                                         
+      1627          # Final disposition — single record per call for downstream PTP                                                                     
+                                                                                   
+● Wire phone_number and dob into the entrypoint:                                                                                                        
+                                                                                   
+● Update(smart_agent.py)                                            
+  ⎿  Added 2 lines                                         
+      1679          amount=dial_info.get("amount", "10000"),
+      1680          debt_date=dial_info.get("debt_date", "2023-01-01"),
+      1681          national_id_last4=dial_info.get("national_id_last4", "1234"),
+      1682 +        dob=dial_info.get("dob", "1990-01-01"),                                                                                      
+      1683 +        phone_number=phone_number,                                                                                                          
+      1684      )
+      1685                                                                                                                                              
+      1686      participant_identity = f"sip-{phone_number}"                       
+                                                                                                                                                        
+● Now let me validate the whole file compiles and the cross-references are sound:  
+                                                         
+● Bash(python -c "import ast; ast.parse(open('smart_agent.py').read()); print('syntax OK')")
+  ⎿  syntax OK                                             
+                                                 
+  Searched for 1 pattern (ctrl+o to expand)                                                                                                             
+                                                                                           
+● paid means the customer claims it's already paid — sending a payment link would be wrong. Fix:
+                                                                                                                                                        
+● Update(smart_agent.py)                                
+  ⎿  Added 3 lines, removed 1 line                                                                                                                      
+      1564                                                                                                                                            
+      1565                                                                                                                                              
+      1566  # Intents that should trigger an SMS payment link after the goodbye plays.                                                                  
+      1567 -_PAYMENT_LINK_INTENTS = {"ok", "paid"}                                                                                                      
+      1567 +# Only "ok" — meaning a confirmed commitment from Stage 4 recap. "paid"                                                                     
+      1568 +# means the customer claims it's already settled, so we verify, not nudge.                                                                  
+      1569 +_PAYMENT_LINK_INTENTS = {"ok"}                                                                                                              
+      1570                                                                                                                                              
+      1571  
+      1572  class ClosingAgent(BaseCallAgent):
+
+● Let me re-check syntax + check all forward references resolve:
+                                                                                           
+● Bash(python -c "                                      
+      import ast, sys…)                                                                                                                                 
+  ⎿  Waiting…
+                                                                                                                                                        
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+● Bash(python -c "import ast; ast.parse(open('smart_agent.py').read()); print('syntax OK')")
+  ⎿  syntax OK
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● paid means the customer claims it's already paid — sending a payment link would be wrong. Fix:
+
+● Update(smart_agent.py)
+  ⎿  Added 3 lines, removed 1 line
+      1564  
+      1565  
+      1566  # Intents that should trigger an SMS payment link after the goodbye plays.
+      1567 -_PAYMENT_LINK_INTENTS = {"ok", "paid"}                                                                                               
+      1567 +# Only "ok" — meaning a confirmed commitment from Stage 4 recap. "paid"                                                              
+      1568 +# means the customer claims it's already settled, so we verify, not nudge.                                                           
+      1569 +_PAYMENT_LINK_INTENTS = {"ok"}                                                                                                       
+      1570  
+      1571  
+      1572  class ClosingAgent(BaseCallAgent):
+
+● Let me re-check syntax + check all forward references resolve:
+
+● Bash(python -c "
+      import ast, sys…)
+  ⎿  defined: ['AskGoodTimeAgent', 'BaseCallAgent', 'CallData', 'ClosingAgent', 'CollectMobileAgent', 'DOBVerifyAgent', 'DisputeAgent', 'Escalation
+     Agent', 'IDVerifyAgent', 'RescheduleAgent', 'ScheduleCallbackAgent', 'Stage1RightPartyAgent', 'Stage2DebtIntroAgent', 'Stage3NegotiationAgent'
+     , 'Stage4RecapAgent', 'WrongPartyKnowsAgent', '_LiveKitNoiseFilter']
+     missing: []                                                                           
+
+● All classes defined. Let me also try importing the module to catch runtime/forward-ref errors early:                                                  
+                                                                                           
+● Bash(.venv/bin/python -c "import smart_agent; print('import OK')" 2>&1 | tail -20)                                                                    
+  ⎿  Traceback (most recent call last):                                                                                                                 
+       File "<string>", line 1, in <module>
+         import smart_agent; print('import OK')                                                                                                         
+     … +4 lines (ctrl+o to expand)                                                                                                                    
+                                                                                                                                                        
+  Listed 1 directory (ctrl+o to expand)                                                                                                                 
+                                                                                           
+● Module-level deps aren't installed in the venv (it's a virtual project). The syntax check passed and all class references are module-level, so they'll
+   resolve at call time. Let me read back the most-changed sections to double-check:                                                                    
+                                                                                                                                                        
+  Read 1 file (ctrl+o to expand)                                                                                                                        
+                                                                                                                                                        
+● Looks good. Final summary:                                                                                                                            
+                                                                                                                                                        
+  What changed in smart_agent.py:                                                                                                                     
+                                                                                                                                                        
+  1. CallData — added dob, phone_number, dob_verified, refusal_attempts, angry_attempts, dispute_open, payment_link_sent.                               
+  2. Side-effect hooks (stubs ready to wire to your provider): _emit_outcome (single structured-log stream so a downstream worker can drive PTP         
+  reminders T-24h/T-2h, retry cadence, DNC suppression), _send_sms_payment_link, _send_sms_callback_card, _request_human_transfer.                      
+  3. PERSONA — added compliance line ("never disclose debt before ID is verified") and a callout for the universal voicemail_detected / customer_angry
+  tools.                                                                                                                                                
+  4. BaseCallAgent — voicemail_detected now leaves a compliant 1-sentence message with no debt details and triggers an SMS callback card before hangup
+  (EC-1). New universal customer_angry tool routes to escalation; second event auto-transfers (EC-4).                                                   
+  5. IDVerifyAgent — single mismatch now silently switches to DOBVerifyAgent instead of re-asking (EC-3). Added explicit refuses_to_verify path that
+  closes without ever disclosing the debt.                                                                                                              
+  6. DOBVerifyAgent (new) — alternate verification with tolerant year-month match (day mishears are common in Arabic STT).
+  7. Stage3NegotiationAgent — refuses_payment now drives the EC-6 ladder in-place (no extra agent transition → no extra LLM round-trip): attempt 1 =    
+  empathy + smallest-entry ask, attempt 2 = soft policy consequence, attempt 3 = HARD_REFUSAL close. disputes_debt routes to DisputeAgent.              
+  8. DisputeAgent (new) — EC-5: opens dispute ticket and asks for an undisputed partial in parallel; accepts_undisputed(amount, when_iso) flows through 
+  Stage 4 recap so the customer hears confirmation.                                                                                                     
+  9. EscalationAgent (new) — EC-4: de-escalate, transfer, or end safely. Pre-verification anger always closes safely without disclosure.
+  10. ClosingAgent — added hard_refusal, escalated, ended_by_customer, verify_refused intents. Fires SMS payment link only on ok (Stage 4 confirmed     
+  commitment), and emits a single structured outcome record after the goodbye plays.                                                                    
+  11. entrypoint — passes phone_number and dob from job metadata into CallData.                                                                         
+                                                                                                                                                        
+  Latency notes: I kept the sub-agent + tool-return pattern over TaskGroup because the latter adds a summarization LLM call when the group exits, and   
+  your stage transitions don't need backtracking. The refusal ladder runs entirely within Stage 3 (no agent swap = no extra LLM turn). PERSONA +        
+  call_context_block are byte-identical across stages so the GPT-4.1 prefix stays cached across transitions. SMS / outcome side-effects always fire     
+  after wait_for_playout() so they never delay audio.       
+
+  To exercise it end-to-end dispatch with metadata like:                                                                                                
+  {"phone_number":"+966...","name":"محمد","amount":"10000","debt_date":"2023-01-01","national_id_last4":"1234","dob":"1990-05-12"}
+                                                                                                                                                        
+  The OUTCOME lines in the logs are now structured JSON ready for piping into a worker that schedules PTP reminders and follow-up calls.                
+                                                                                                                                                        
+✻ Cooked for 9m 15s                                                                                                                                     
+                                                                                                                                                        
+※ recap: Goal: extend smart_agent.py with the call-flow.txt requirements while keeping latency low. Done: added DOB fallback, escalation, dispute       
+  partial-pay, refusal ladder, voicemail message, SMS hooks, structured outcome logging. Next: install deps and dispatch a test call. (disable recaps in
+   /config)                                                                                                                                             
+                                                                                                                                                        
+❯ convert what you did into an agent-skills.md file. i also need documentation of these changes.                                                        
+                                                                                                 
+● Write(agent-skills.md)                                                                                                                                
+  ⎿  Wrote 361 lines to agent-skills.md                                    
+       1 # Noura v2 — Agent Skills & Change Log
+       2                                                                                                                                                
+       3 Reference for the Noura outbound-collections agent (`smart_agent.py`).
+       4 Documents every flow the agent can run, where the boundaries are between                                                                       
+       5 LLM judgement and deterministic code, and which side-effects each
+       6 disposition triggers.                                                                                                                          
+       7                                                    
+       8 ---
+       9
+      10 ## 1. Architecture at a glance
+     … +352 lines (ctrl+o to expand)
+
+● Created agent-skills.md (~280 lines). It covers:
+                                                                           
+  1. Architecture — why the sub-agent + tool-return pattern was kept over TaskGroup (avoids the summarisation LLM call), and the latency budget per     
+  turn.                                                                                                                                                 
+  2. Full FSM map — every stage, every tool, every transition, with the new components flagged (NEW).                                                   
+  3. Per-skill reference — what each agent does, including the revised behaviours of IDVerifyAgent, Stage3NegotiationAgent, and ClosingAgent.           
+  4. Side-effect hooks — the four stubs and where to plug real providers.                                                                               
+  5. Outcome event schema — JSON shape + the kind vocabulary, distinguishing mid-call events from the single close_<intent> audit record.               
+  6. Compliance guarantees — table of "rule → file location" for audit purposes.                                                                        
+  7. call-flow.txt → code mapping — every HP/EC item lined up against its implementation.                                                               
+  8. Job metadata contract — the keys dispatch.py should send.                                                                                          
+  9. Latency-preserving choices — explicit list so future refactors don't accidentally regress them.                                                    
+  10. Integration points — the four hooks and what they should be wired to.                                                                             
+                                                                                                                                                        
+✻ Worked for 1m 55s                                                                                                                                     
+                                                                                                                                                        
+※ recap: Goal was to extend the Noura LiveKit collections agent to fully cover call-flow.txt while preserving latency. Both the code revision and the   
+  agent-skills.md documentation are done; next action is to wire the four stub hooks to real providers. (disable recaps in /config)                     
+                                                                                                                                                        
+❯ please do the testing of the current app.                                                                                                             
+                                                                                                                                                        
+● I'll do a layered test pass: install deps and import the module to verify nothing is broken at runtime, then write unit tests for the deterministic   
+  pieces (the FSM transitions and side-effects we changed). Real phone-call testing requires SIP + a live number which I can't drive from here — I'll be
+   explicit about what's covered and what isn't.
+                                                                                                                                                        
+  Let me first see what state the venv is in and get deps installed:                                                                                    
+                                                                                                                                                        
+● Bash(ls .venv/lib/python*/site-packages/ 2>&1 | head -30; echo '---'; .venv/bin/python --version)                                                     
+  ⎿  __pycache__                                                                           
+     _virtualenv.pth
+     _virtualenv.py                                                                                                                                     
+     … +2 lines (ctrl+o to expand)                                                         
+                                                                                                                                                        
+  Listed 1 directory (ctrl+o to expand)                                                                                                                 
+                                                                                           
+● Bash(which python python3; python3 -c "import livekit.agents" 2>&1 | head -5; python3 -c "import dotenv" 2>&1 | head -5)                              
+  ⎿  /home/abdur/Desktop/Tawfq_Projects/Noura-v2/.venv/bin/python                                                                                       
+     /home/abdur/Desktop/Tawfq_Projects/Noura-v2/.venv/bin/python3                                                                                      
+     Traceback (most recent call last):                                                                                                                 
+     … +7 lines (ctrl+o to expand)                                                                                                                      
+                                                                                                                                                        
+● No deps installed. Let me try installing the LiveKit packages — if they're publicly available we can do a real import; if some are private we'll fall 
+  back to testing the pure helpers in isolation:                                                                                                      
+                                                                                                                                                        
+● Bash(uv pip install python-dotenv livekit-agents 2>&1 | tail -20)                                                                                     
+  ⎿   + pycparser==3.0                                                                                                                                  
+      + pydantic==2.13.3                                                                                                                                
+      + pydantic-core==2.46.3                                                                                                                           
+     … +17 lines (ctrl+o to expand)                                                                                                                     
+  ⎿  (timeout 2m)                                                                                                                                       
+                                                                                                                                                        
+● Bash(uv pip install livekit-plugins-deepgram livekit-plugins-openai livekit-plugins-silero livekit-plugins-soniox 2>&1 | tail -8)                     
+  ⎿   + livekit-plugins-deepgram==1.5.7                                                                                                                 
+      + livekit-plugins-openai==1.5.7                                                                                                                   
+      + livekit-plugins-silero==1.5.7                                                                                                                   
+     … +5 lines (ctrl+o to expand)                                                                                                                      
+                                                                                                                                                        
+● Bash(uv pip install livekit-plugins-faseeh hamsa-livekit 2>&1 | tail -10)                                                                             
+  ⎿    × No solution found when resolving dependencies:                                                                                                 
+       ╰─▶ Because hamsa-livekit was not found in the package registry and you                                                                          
+           require hamsa-livekit, we can conclude that your requirements are                                                                            
+           unsatisfiable.                                                                  
+                                                                                                                                                        
+● Bash(uv pip install livekit-plugins-faseeh 2>&1 | tail -10)                                                                                           
+  ⎿  Resolved 69 packages in 88ms                                                          
+     Installed 1 package in 5ms                                                                                                                         
+      + livekit-plugins-faseeh==0.1.5                                                                                                                   
+                                                                                           
+  Searched for 1 pattern (ctrl+o to expand)                                                                                                             
+                                                                                                                                                        
+● hamsa_livekit is imported but never referenced in the file — likely a vestigial import. I'll stub it locally for the import to succeed (without
+  modifying the source) so tests can run:                                                                                                               
+                                                            
+● Bash(SITE=$(.venv/bin/python -c "import sys; print([p for p in sys.path if 'site-packages' in p][0])"); echo "site: $SITE"; mkdir -p                  
+      "$SITE/hamsa_livekit" && echo '"…)                                                   
+  ⎿  site: /home/abdur/Desktop/Tawfq_Projects/Noura-v2/.venv/lib/python3.13/site-packages                                                               
+     __init__.py                                                                                                                                        
+                                                                                                                                                        
+● Bash(.venv/bin/python -c "import smart_agent; print('IMPORT OK'); print('classes:', [c for c in dir(smart_agent) if c.endswith('Agent')])" 2>&1 | tail
+       -20)                                                                                
+  ⎿  IMPORT OK                                                                                                                                          
+     classes: ['Agent', 'AskGoodTimeAgent', 'BaseCallAgent', 'ClosingAgent', 'CollectMobileAgent', 'DOBVerifyAgent', 'DisputeAgent', 'EscalationAge     
+     nt', 'IDVerifyAgent', 'RescheduleAgent', 'ScheduleCallbackAgent', 'Stage1RightPartyAgent', 'Stage2DebtIntroAgent', 'Stage3NegotiationAgent', '     
+     Stage4RecapAgent', 'WrongPartyKnowsAgent']                                                                                                         
+                                                                                                                                                        
+● Module imports cleanly with all 14 stage agents present. Now I'll write a focused test suite for the deterministic logic — the parts I changed and the
+   pure helpers — and run it:                                                                                                                           
+                                                                                                                                                        
+● Write(tests/test_smart_agent.py)                                                                                                                      
+  ⎿  Wrote 587 lines to tests/test_smart_agent.py                                                                                                       
+       1 """Unit tests for smart_agent.py — covers the deterministic pieces I can                                                                       
+       2 exercise without a live LiveKit session: Najdi normalisation, DOB tolerant                                                                     
+       3 match, FSM tool transitions, refusal ladder, dispute routing, voicemail                                                                        
+       4 side-effect, ClosingAgent SMS gating, outcome event schema.                                                                                    
+       5                                                                                                                                                
+       6 What is NOT covered here (out of scope for unit tests — needs a live SIP                                                                       
+       7 trunk + a real phone leg):                         
+       8 - Actual LLM behaviour / prompt adherence
+       9 - TTS/STT/VAD plumbing
+      10 - The on_enter hooks that call self.session.generate_reply
+     … +577 lines (ctrl+o to expand)
+
+● Bash(uv pip install pytest pytest-asyncio 2>&1 | tail -3)
+  ⎿   + pluggy==1.6.0                                                                      
+      + pytest==9.0.3
+      + pytest-asyncio==1.3.0                                                                                                                           
+                                                                                           
+● Write(tests/conftest.py)                                                                                                                              
+  ⎿  Wrote 5 lines to tests/conftest.py                                                                                                                 
+      1 import sys                   
+      2 from pathlib import Path                                                                                                                        
+      3                                                     
+      4 # Ensure the project root is importable so `import smart_agent` resolves.                                                                       
+      5 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+                                                                                                                                                        
+● Write(pytest.ini)                                         
+  ⎿  Wrote 5 lines to pytest.ini                                                           
+      1 [pytest]                     
+      2 asyncio_mode = auto                                                                                                                             
+      3 testpaths = tests
+      4 filterwarnings =                                                                                                                                
+      5     ignore::DeprecationWarning                      
+                                                                                                                                                        
+● Bash(.venv/bin/python -m pytest tests/ -v 2>&1 | tail -80)
+  ⎿      def _patch_session(agent):                                                        
+             """Tools read self.session for generate_reply / interrupt; install a
+             mock so calls are recorded but don't blow up."""                                                                                           
+     … +35 lines (ctrl+o to expand)                                                        
+  ⎿  (timeout 1m)                                                                                                                                       
+                                                                                                                                                        
+● Pure helpers (37 tests) pass. Stage-level tests fail because Agent.session is a read-only property. Let me find the right way to inject a mock:       
+                                                                                                                                                        
+● Bash(.venv/bin/python -c "                                                                                                                            
+      from livekit.agents import Agent…)                                                                                                                
+  ⎿      @property                                                                                                                                      
+         def session(self) -> AgentSession:                                                                                                             
+             """                                                                                                                                        
+     … +6 lines (ctrl+o to expand)                                                                                                                      
+                                                                                           
+● Bash(.venv/bin/python -c "                                                                                                                            
+      from livekit.agents import Agent…)                                                                                                                
+  ⎿      def _get_activity_or_raise(self) -> AgentActivity:                                                                                             
+             """Get the current activity context for this task (internal)"""                                                                            
+             if self._activity is None:                                                                                                                 
+     … +6 lines (ctrl+o to expand)                                                                                                                      
+                                                                                                                                                        
+● session is read via self._activity.session. I'll inject a fake activity:                                                                              
+                                                                                                                                                        
+● Update(tests/test_smart_agent.py)                                                                                                                     
+  ⎿  Added 9 lines, removed 5 lines                                                                                                                     
+      248                                                                                                                                               
+      249                                                                                                                                               
+      250  def _patch_session(agent):                                                                                                                   
+      251 -    """Tools read self.session for generate_reply / interrupt; install a                                                                     
+      252 -    mock so calls are recorded but don't blow up."""                                                                                       
+      253 -    agent.session = MagicMock()                                                                                                              
+      254 -    agent.session.generate_reply = MagicMock(return_value=MagicMock())                                                                       
+      255 -    return agent.session                                                                                                                     
+      251 +    """Tools read self.session for generate_reply / interrupt; the real                                                                      
+      252 +    Agent.session property reads from self._activity.session, so we mock                                                                     
+      253 +    that path."""                                                                                                                            
+      254 +    activity = MagicMock()                                                                                                                   
+      255 +    session = MagicMock()                                                                                                                    
+      256 +    session.generate_reply = MagicMock(return_value=MagicMock())                                                                      
+      257 +    activity.session = session                                                                                                        
+      258 +    agent._activity = activity                                                                                                        
+      259 +    return session                                                                                                                    
+      260  
+      261  
+      262  @pytest.mark.asyncio
+
+● Bash(.venv/bin/python -m pytest tests/ 2>&1 | tail -50)
+  ⎿  ============================= test session starts ==============================      
+     platform linux -- Python 3.13.9, pytest-9.0.3, pluggy-1.6.0
+     rootdir: /home/abdur/Desktop/Tawfq_Projects/Noura-v2                                                                                               
+     … +9 lines (ctrl+o to expand)                                                         
+  ⎿  (timeout 1m)                                                                                                                                       
+                                                                                                                                                        
+● All 60 tests pass in under 4 seconds. Let me run them once more with verbose output so you can see the full coverage:                                 
+                                                                                                                                                        
+● Bash(.venv/bin/python -m pytest tests/ -v --tb=no 2>&1 | tail -75)                                                                                    
+  ⎿  ============================= test session starts ==============================                                                                   
+     platform linux -- Python 3.13.9, pytest-9.0.3, pluggy-1.6.0 -- /home/abdur/Desktop/Tawfq_Projects/Noura-v2/.venv/bin/python                        
+     cachedir: .pytest_cache                                                                                                                            
+     … +42 lines (ctrl+o to expand)                                                                                                                     
+  ⎿  (timeout 1m)                                                                                                                                       
+                                                                                                                                                        
+● 60 tests, all passing in ~3.6 s.                                                                                                                      
+                                                                                                                                                        
+  Test summary                                                                                                                                          
+                                                                                                                                                        
+  ┌────────────────────────────┬───────┬────────────────────────────────────────────────────────────────────────────────────────────────────────────┐   
+  │           Group            │ Count │                                               What it covers                                               │   
+  ├────────────────────────────────┼───────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────┤  
+  │ TestNajdiNormalize             │ 17    │ _ar_below_1000, _ar_amount_words, _ar_date_words, _ar_digits_individual, full _najdi_normalize (riyal   │
+  │                                │       │ amounts, 4-digit IDs read individually, ISO dates, brand terms stc/SIMAH)                               │
+  ├─────────────────────────────────┼───────┼────────────────────────────────────────────────────────────────────────────────────────────────────────┤  
+  │ TestDOBNormalize                │ 7     │ ISO parsing, zero-padding, Arabic-Indic digits (٠-٩), invalid month/day, garbage, empty                │
+  ├─────────────────────────────────┼───────┼────────────────────────────────────────────────────────────────────────────────────────────────────────┤  
+  │ TestSideEffectHooks             │ 5     │ _emit_outcome JSON shape, _send_sms_payment_link flag flip + no-phone short-circuit,                   │
+  │                                 │       │ _send_sms_callback_card no-op without phone, _request_human_transfer log line                          │  
+  ├─────────────────────────────────┼───────┼────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ TestCallData                    │ 4     │ New fields default correctly; PII guard: phone_number and dob are NOT leaked into the LLM prompt;      │  
+  │                                 │       │ floor/ideal anchors (5%/10%) appear in the prompt                                                      │  
+  ├─────────────────────────────────┼───────┼────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ TestStage3RefusalLadder (EC-6)  │ 3     │ 1st refusal stays in-stage with empathy + smallest-entry hint; 2nd refusal explicitly forbids          │  
+  │                                 │       │ threats/legal language; 3rd refusal closes with hard_refusal and emits the OUTCOME row                 │  
+  ├─────────────────────────────────┼───────┼────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ TestStage3DisputeRouting        │ 1     │ disputes_debt → DisputeAgent (not direct close)                                                        │  
+  ├─────────────────────────────────┼───────┼────────────────────────────────────────────────────────────────────────────────────────────────────────┤  
+  │ TestDisputeAgent (EC-5)         │ 2     │ accepts_undisputed builds the right commitment string + emits structured OUTCOME; declines_partial     │
+  │                                 │       │ closes with dispute                                                                                    │  
+  ├─────────────────────────────────┼───────┼────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │                                 │       │ Match → Stage 2; mismatch → DOB fallback (no debt disclosure); short digits re-ask without consuming   │  
+  │ TestIDVerifyDOBFallback (EC-3)  │ 5     │ attempts; Arabic-Indic digits recognised; refuses_to_verify closes with verify_refused and id_verified │  
+  │                                 │       │  stays False                                                                                           │
+  ├─────────────────────────────────┼───────┼────────────────────────────────────────────────────────────────────────────────────────────────────────┤  
+  │ TestDOBVerifyAgent              │ 4     │ Exact match; tolerant year+month match (day mishears OK); wrong month/year rejected → id_mismatch      │
+  ├─────────────────────────────────┼───────┼────────────────────────────────────────────────────────────────────────────────────────────────────────┤  
+  │ TestEscalationAgent (EC-4)      │ 3     │ De-escalation post-verify resumes Stage 3; pre-verify de-escalation closes safely (no leak); transfer  │
+  │                                 │       │ logs the right reason                                                                                  │  
+  ├─────────────────────────────────┼───────┼────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ TestUniversalCustomerAngryTool  │ 3     │ First event → Escalation from Stage 3; second event auto-transfers; tool is available on Stage 1 (so   │  
+  │                                 │       │ anger is handled even before verification)                                                             │  
+  ├─────────────────────────────────┼───────┼────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ TestWrongPartyContactInvalidLog │ 2     │ Both wrong-party paths emit contact_invalid for the dialer                                             │  
+  ├─────────────────────────────────┼───────┼────────────────────────────────────────────────────────────────────────────────────────────────────────┤  
+  │ TestClosingIntents              │ 3     │ All 15 documented intents have closing hints; payment link is gated to ok only; unknown intent falls   │
+  │                                 │       │ back to ok                                                                                             │  
+  ├─────────────────────────────────┼───────┼────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ TestFSMReachability             │ 1     │ All 14 stage agents inherit BaseCallAgent (so the universal tools always apply)                        │  
+  └─────────────────────────────────┴───────┴────────────────────────────────────────────────────────────────────────────────────────────────────────┘  
+  
+  Compliance assertions baked into tests                                                                                                                
+                                                            
+  These are the lines that would catch a regression if someone "fixed" the wrong thing:                                                                 
+  
+  - test_call_context_block_omits_phone — phone & DOB never enter the prompt.                                                                           
+  - test_mismatch_routes_to_dob_fallback_no_disclosure — single ID mismatch must NOT fall through to Stage 2.
+  - test_refuses_to_verify_closes_without_disclosure — id_verified stays False on refusal.                                                              
+  - test_de_escalated_pre_verify_closes_safely — anger before verification can't drop into negotiation.
+  - test_second_refusal_soft_consequence_no_threats — the prompt explicitly forbids threats/legal language.                                             
+  - test_payment_link_only_on_ok — paid (a customer claim) doesn't trigger an SMS payment link.                                                         
+                                                                                                                                                        
+  What is not covered (and why)                                                                                                                         
+                                                                                                                                                        
+  These need a live SIP trunk + a real phone leg, so I can't drive them from here:                                                                      
+                                                            
+  - LLM behaviour / Najdi prompt adherence                                                                                                              
+  - STT / TTS / VAD plumbing and timing                     
+  - on_enter hooks that emit speech (they call session.generate_reply)                                                                                  
+  - voicemail_detected playout + hangup race                                                                                                            
+  - ClosingAgent.on_enter playout/hangup race                                                                                                           
+  - End-to-end turn latency                                                                                                                             
+                                                                                                                                                        
+  Recommended for those: dispatch a test call to your own number with dispatch.py and watch the per-turn EOU / LLM / TTS / TURN total log lines that the
+   existing metrics_collected handler already emits.                                                                                                    
+                                                                                                                                                        
+  Files added                                               
+
+  - tests/test_smart_agent.py — the suite (60 tests).                                                                                                   
+  - tests/conftest.py — adds project root to sys.path.
+  - pytest.ini — asyncio_mode = auto so async tests run without per-test decorators.                                                                    
+                                                                                                                                                        
+  Run any time with:                                                                                                                                    
+                                                                                                                                                        
+  .venv/bin/python -m pytest tests/ -v                                                                                                                  
+  
+✻ Crunched for 4m 45s                                                                                                                                   
+                                                                                           
+※ recap: Goal: extend the Noura LiveKit collections agent to cover the full call-flow.txt spec (escalation, dispute, DOB fallback, refusal ladder, SMS  
+  hooks) without losing latency. Suite of 60 unit tests passes. Next: dispatch a real test call via dispatch.py to verify end-to-end audio and turn     
+  latency. (disable recaps in /config)                                                                                                                  
+                                                                                                                                                        
+❯ add all required packages to the enviroment                                                                                                           
+                                              
+● I'll register the deps properly in pyproject.toml via uv add (so they survive a clean checkout), and clean up the unused hamsa_livekit import + its   
+  stub:                                              
+
+  Searched for 1 pattern (ctrl+o to expand)                                                                                                             
+                                                     
+● Confirmed: hamsa_livekit is imported but never referenced. It isn't on PyPI either. I'll remove the dead import and the stub I created earlier:       
+                                                                                                                                                        
+● Update(smart_agent.py)                          
+  ⎿  Removed 1 line                                                                                                                                     
+      58      get_job_context,                              
+      59  )                                                                                                                                             
+      60  from livekit.agents.voice import ModelSettings    
+      61 -import hamsa_livekit                                                                                                                          
+      61  from livekit.plugins import deepgram, faseeh, openai, silero
+      62  from livekit.plugins import soniox                                                                                                            
+      63                                                    
+
+● Bash(rm -rf .venv/lib/python3.13/site-packages/hamsa_livekit && echo "stub removed")
+  ⎿  stub removed                                    
+
+● Now wipe the venv (it has packages that aren't tracked in pyproject.toml) and rebuild it via uv add so everything is reproducible:                    
+                                                     
+● Bash(rm -rf .venv && uv venv 2>&1 | tail -5)                                                                                                          
+  ⎿  Using CPython 3.13.9 interpreter at: /home/abdur/miniconda3/bin/python3                                                                            
+     Creating virtual environment at: .venv
+     Activate with: source .venv/bin/activate                                                                                                           
+                                                            
+● Bash(uv add python-dotenv livekit-agents livekit-plugins-deepgram livekit-plugins-faseeh livekit-plugins-openai livekit-plugins-silero                
+      livekit-plugins-soniox 2>&1 |…)                                                                                                                   
+  ⎿   + tqdm==4.67.3           
+      + typer==0.25.1                                                                                                                                   
+      + types-protobuf==7.34.1.20260408                                                                                                                 
+     … +7 lines (ctrl+o to expand)                                                                                                                      
+  ⎿  (timeout 5m)                                                                                                                                       
+                                                                                                                                                        
+● Bash(uv add --dev pytest pytest-asyncio 2>&1 | tail -8)                                                                                               
+  ⎿  Resolved 84 packages in 157ms                                                                                                                      
+     Prepared 1 package in 599ms                                                                                                                        
+     Installed 4 packages in 17ms                                                                                                                       
+     … +4 lines (ctrl+o to expand)                                                                                                                      
+                                                                                                                                                        
+  Read 1 file (ctrl+o to expand)                                                                                                                        
+                                                                                                                                                        
+● pyproject.toml and uv.lock now track everything. Let me verify a clean install reproduces the env, and re-run the tests + a syntax check on           
+  smart_agent.py:                                                                                                                                       
+                                                                                                                                                        
+● Bash(.venv/bin/python -c "import smart_agent; print('IMPORT OK')" && .venv/bin/python -m pytest tests/ 2>&1 | tail -10)                               
+  ⎿  IMPORT OK                                                                                                                                          
+     rootdir: /home/abdur/Desktop/Tawfq_Projects/Noura-v2                                                                                               
+     configfile: pytest.ini                                                                                                                             
+     … +8 lines (ctrl+o to expand)                                                                                                                    
+  ⎿  (timeout 1m)                                                                                                                                       
+                                                                                                                                                        
+● Bash(uv tree --depth 1 2>&1 | head -20; echo '---'; ls -la uv.lock | awk '{print $5, $NF}')                                                           
+  ⎿  Resolved 84 packages in 1ms                                                                                                                        
+     noura-v2 v0.1.0                                                                                                                                    
+     ├── livekit-agents v1.5.7                                                                                                                          
+     … +10 lines (ctrl+o to expand)                                                                                                                     
+                                                                                                                                                        
+● Clean. Recap:                                                                                                                                         
+                                                                                                                                                        
+  Runtime deps (in [project.dependencies]):                                                                                                             
+  - livekit-agents>=1.5.7                                                                                                                               
+  - livekit-plugins-deepgram>=1.5.7                                                                                                                     
+  - livekit-plugins-faseeh>=0.1.5                                                                                                                       
+  - livekit-plugins-openai>=1.5.7                                                                                                                       
+  - livekit-plugins-silero>=1.5.7                                                                                                                       
+  - livekit-plugins-soniox>=1.5.7                                                                                                                       
+  - python-dotenv>=1.2.2                                                                                                                                
+                                                                                                                                                        
+  Dev deps (in [dependency-groups.dev]):
+  - pytest>=9.0.3                                                                                                                                       
+  - pytest-asyncio>=1.3.0                                                                                                                               
+                         
+  Cleanup made: removed the unused import hamsa_livekit from smart_agent.py:61 (and the test stub I'd created earlier). It was never referenced and     
+  isn't on PyPI, so leaving it in would have made uv sync fail on a fresh machine.                                                                      
+  
+  Reproducibility check passed: deleted the venv, ran uv add ..., uv.lock regenerated (301 KB, 84 transitive packages), import smart_agent succeeds, all
+   60 tests pass in 3.58 s.                                                                                                                           
+                                                                                                                                                        
+  For anyone cloning the repo:                                                                                                                          
+  
+  uv sync           # installs runtime deps                                                                                                             
+  uv sync --all-groups   # adds the dev group (pytest)                                                                                                  
+  uv run pytest    # runs the test suite
+                                                                                                                                                        
+✻ Churned for 1m 22s                                                                                                                                  
+                                                                                                                                                        
+❯ did you used any of the agent-skills.md files i gave you in the plugins                                                                               
+                                                                                                                                                        
+● No — I didn't invoke any of them. I went straight to editing the code, writing agent-skills.md (which is a file I wrote, unrelated to the plugin's    
+  skills), writing the test suite, and managing deps. None of these went through:                                                                       
+                                                                                                                                                        
+  - agent-skills:plan (would have produced a structured task breakdown before I started)                                                                
+  - agent-skills:incremental-implementation (governs how to land changes one verifiable step at a time)
+  - agent-skills:test-driven-development / agent-skills:test (would have written tests before the code changes, not after)                              
+  - agent-skills:code-review-and-quality / agent-skills:review (5-axis review of the diff before declaring done)                                        
+  - agent-skills:security-and-hardening (would have audited the compliance/PII paths systematically, not ad-hoc)                                        
+  - agent-skills:source-driven-development (would have grounded LiveKit usage in cited official docs)                                                   
+  - agent-skills:documentation-and-adrs (would have framed the doc as an ADR with explicit decisions/tradeoffs)                                         
+  - agent-skills:git-workflow-and-versioning (commit hygiene)                                                                                           
+                                                                                                                                                        
+  The closest I came was running internal task tracking (TaskCreate/TaskUpdate), which is a generic CLI feature, not one of those plugin skills.        
+                                                                                                                                                        
+  If any of these would be useful retroactively, the high-value ones for what we just did are probably:                                                 
+                                                            
+  - agent-skills:review — independent 5-axis review of the smart_agent.py diff (correctness, readability, architecture, security, performance) before   
+  you trust it on a real call.                              
+  - agent-skills:security-and-hardening — focused audit of the compliance guarantees: no debt disclosure pre-verify, no PII in prompt context, no       
+  threats in refusal language.                                                                                                                          
+   
+  Want me to run one or both?                                                                                                                           
+                                                            
+✻ Baked for 18s
+
+※ recap: Goal: extend the LiveKit collections agent in smart_agent.py to cover the full call-flow.txt spec while keeping latency low. Code, docs, deps, 
+  and 60 passing tests are done; next action is to run agent-skills:review on the changes if you want a second opinion before a live call test.
+                                                                                                                                                        
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯  
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on (shift+tab to cycle)
+
