@@ -1484,3 +1484,60 @@ Audited in 0.00ms
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   ⏵⏵ accept edits on (shift+tab to cycle)
 
+
+
+● Here's the full cycle, copy-paste ready.                                                                                                              
+                                                                                                                                                      
+  On your laptop — push your changes                                                                                                                    
+                                                                                                                                                        
+  cd /home/abdur/Desktop/voice_agents/test_agents/live-kit-tuts                                                                                         
+  git status                                                                                                                                            
+  git add smart_agent_ec2.py            # or whatever you changed
+  git commit -m "tweak prompt / latency / id-loop"                                                                                                      
+  git push origin main                                                                                                                                
+                                                                                                                                                        
+  On EC2 — pull, sync deps, restart, watch logs                                                                                                         
+                                                                                                                                                        
+  ssh -i $KEY ubuntu@$EC2                                                                                                                               
+                                                                                                                                                      
+  cd /home/ubuntu/live-kit-tuts                                                                                                                         
+  git pull
+                                                                                                                                                        
+  # Only if you added/removed packages in pyproject.toml:                                                                                               
+  /home/ubuntu/.local/bin/uv sync
+                                                                                                                                                        
+  sudo systemctl restart livekit-agent                                                                                                                  
+   
+  # Confirm it came up clean                                                                                                                            
+  sudo systemctl status livekit-agent --no-pager                                                                                                      
+                                                                                                                                                        
+  Tail the logs during a test call                                                                                                                    
+
+  sudo tail -f /var/log/livekit-agent.log | grep -E "message|error|dialing|speaking|transcript"
+                                                                                                                                                        
+  Then dispatch from your laptop (separate terminal)                                                                                                    
+                                                                                                                                                        
+  cd /home/abdur/Desktop/voice_agents/test_agents/live-kit-tuts                                                                                         
+  uv run python dispatch.py                                                                                                                             
+   
+  Make sure your local .env has AGENT_NAME=outbound-caller-aws and the right PHONE_NUMBER.                                                              
+                                                                                                                                                      
+  Useful one-liners                                                                                                                                     
+                                                                                                                                                      
+  # Quick post-restart sanity check                                                                                                                     
+  sudo systemctl restart livekit-agent && sleep 2 && sudo tail -n 60 /var/log/livekit-agent.log                                                       
+                                                                                                                                                        
+  # Just latency lines from the last call                                                                                                               
+  sudo tail -n 500 /var/log/livekit-agent.log | grep -E "TURN total|LLM  ttft|TTS  ttfb|EOU "                                                           
+                                                                                                                                                        
+  # Just the conversation transcript                                                                                                                    
+  sudo tail -n 500 /var/log/livekit-agent.log | grep -E "AGENT |USER |TOOL |OUTCOME"                                                                    
+                                                                                                                                                        
+  # Rollback to previous commit if a change breaks things                                                                                               
+  cd /home/ubuntu/live-kit-tuts && git reset --hard HEAD~1 && sudo systemctl restart livekit-agent                                                      
+                                                                                                                                                        
+  Don't do                                                                                                                                              
+                                                                                                                                                        
+  - Don't run uv run python smart_agent_ec2.py start manually while the systemd unit is active (port 8081 collision).                                   
+  - Don't git pull without committing/pushing your local edits first — they're not on EC2 otherwise.                                                  
+  - Don't edit pyproject.toml casually before uv sync — it will uninstall anything not listed (that's what burned us last time). 
